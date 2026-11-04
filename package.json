@@ -1,0 +1,20 @@
+{
+  "name": "career-sync",
+  "version": "1.0.0",
+  "description": "Carrer guide web?",
+  "homepage": "https://github.com/IFlox/Career-Sync#readme",
+  "bugs": {
+    "url": "https://github.com/IFlox/Career-Sync/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IFlox/Career-Sync.git"
+  },
+  "license": "ISC",
+  "author": "IFlox",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
