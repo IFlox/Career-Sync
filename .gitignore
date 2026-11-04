@@ -40,3 +40,4 @@ dist/
 # Generated API/client files
 openapi.json
 frontend/node_modules/
+node_modules/

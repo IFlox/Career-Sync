@@ -1,20 +1,14 @@
 {
-  "name": "career-sync",
+  "name": "careersync-monorepo",
   "version": "1.0.0",
-  "description": "Carrer guide web?",
-  "homepage": "https://github.com/IFlox/Career-Sync#readme",
-  "bugs": {
-    "url": "https://github.com/IFlox/Career-Sync/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/IFlox/Career-Sync.git"
-  },
-  "license": "ISC",
-  "author": "IFlox",
-  "type": "commonjs",
-  "main": "index.js",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "install:all": "npm install --prefix frontend && cd backend && python -m venv .venv && pip install -r requirements.txt",
+    "backend": "cd backend && python main.py",
+    "frontend": "npm run dev --prefix frontend",
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm run backend\" \"npm run frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   }
 }
