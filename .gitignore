@@ -21,6 +21,7 @@ htmlcov/
 *.sqlite
 *.sqlite3
 uploads/
+.github/
 
 # IDE and operating-system files
 .vscode/*
