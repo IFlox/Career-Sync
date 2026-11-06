@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "install:all": "npm install --prefix frontend && cd backend && python -m venv .venv && pip install -r requirements.txt",
-    "backend": "cd backend && python main.py",
+    "backend": "cd backend && uvicorn main:app --reload --reload-engine watchgod --port 8000",
     "frontend": "npm run dev --prefix frontend",
     "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm run backend\" \"npm run frontend\""
   },
