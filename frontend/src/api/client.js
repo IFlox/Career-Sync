@@ -78,6 +78,25 @@ export const apiClient = {
     return res.json();
   },
 
+  // Add these inside apiClient object:
+  async getStudentProgress(studentId) {
+    const res = await fetch(`${API_BASE}/students/${studentId}/progress`);
+    if (!res.ok) throw new Error('Failed to fetch progress');
+    return res.json();
+  },
+
+  async toggleMilestone(studentId, weekNumber, currentReadiness) {
+    const res = await fetch(`${API_BASE}/students/${studentId}/milestones/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        week_number: weekNumber,
+        current_readiness: currentReadiness
+      })
+    });
+    return res.json();
+  },
+
   getExportCSVUrl(adminPin = 'tpo_secure_2026') {
     return `${API_BASE}/admin/export/csv`;
   },

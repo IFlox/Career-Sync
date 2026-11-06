@@ -18,6 +18,7 @@ from services.resume_auditor import ResumeAuditorService
 from services.matching_engine import SemanticMatchingEngine
 from services.market_radar import MarketRadarService
 from services.interview_agent import InterviewAgentService
+from services.progress_tracker import ProgressTrackerService
 
 # 1. Initialize Router First
 router = APIRouter(prefix="/students", tags=["Student Portal"])
@@ -36,6 +37,9 @@ class AnswerSubmitRequest(BaseModel):
 class UrlIngestRequest(BaseModel):
     url: str
 
+class MilestoneToggleRequest(BaseModel):
+    week_number: int
+    current_readiness: int = 75
 
 # 3. Real PDF Upload Endpoint with Agent Execution Telemetry
 @router.post("/resume/upload-pdf")
@@ -255,12 +259,20 @@ def fetch_interview_question(skill: str = "RAG Pipelines", difficulty: int = 6):
 
 @router.post("/interview/evaluate")
 def evaluate_interview_answer(payload: AnswerSubmitRequest):
-    return CareerSyncAIEngine.evaluate_interview_response_with_ai(
+    evaluation = CareerSyncAIEngine.evaluate_interview_response_with_ai(
         skill=payload.skill,
         question=payload.question_text,
         candidate_answer=payload.answer_text,
         current_difficulty=payload.current_difficulty
     )
+    # Log interview score to persistent timeline
+    ProgressTrackerService.log_interview_attempt(
+        student_id="stud-01",
+        skill=payload.skill,
+        score=evaluation.get("score", 7),
+        current_readiness=78
+    )
+    return evaluation
 
 
 # 8. Web Ingestion Tool
@@ -286,3 +298,18 @@ def ingest_external_url(payload: UrlIngestRequest):
                 "required_skills": ["Docker", "Kubernetes", "Vector Embeddings"]
             }
         }
+
+# 9. Student Progress Tracker Endpoints
+@router.get("/{student_id}/progress")
+def get_student_progress(student_id: str):
+    """Fetches persistent time-series readiness and milestone state."""
+    return ProgressTrackerService.get_progress(student_id)
+
+@router.post("/{student_id}/milestones/toggle")
+def toggle_milestone_progress(student_id: str, payload: MilestoneToggleRequest):
+    """Persists milestone state and recalculates readiness trajectory."""
+    return ProgressTrackerService.toggle_milestone(
+        student_id=student_id,
+        week_number=payload.week_number,
+        current_readiness=payload.current_readiness
+    )

@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import ProgressTimelineWidget from './ProgressTimelineWidget';
+import { apiClient } from '../api/client';
 import { 
   Upload, FileText, CheckCircle2, AlertTriangle, ShieldCheck, 
   ExternalLink, Sparkles, TrendingUp, Compass, ArrowRight, Eye, RefreshCw
@@ -8,6 +10,7 @@ import { assessLayoffRisk, MARKET_SKILL_RADAR } from '../data/marketTaxonomy';
 import { evaluateJobMatch } from '../utils/semanticMatcher';
 import { auditResumeContent } from '../utils/resumeAuditor';
 import ConcentricReadinessDial from './ConcentricReadinessDial';
+import SkillRadarChart from './SkillRadarChart';
 import MockInterview from './MockInterview';
 import ATSPreviewModal from './ATSPreviewModal';
 
@@ -18,12 +21,22 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
   const [isATSModalOpen, setIsATSModalOpen] = useState(false);
   const [completedMilestones, setCompletedMilestones] = useState([1]); // Completed Week 1
   const [interviewScore, setInterviewScore] = useState(70);
+  const [serverProgress, setServerProgress] = useState(null);
+
+  React.useEffect(() => {
+    apiClient.getStudentProgress(currentStudent.id)
+      .then(data => {
+        setServerProgress(data);
+        setCompletedMilestones(data.completed_milestones || []);
+      })
+      .catch(err => console.log("Progress sync fallback:", err));
+  }, [currentStudent.id]);
 
   const selectedJob = TARGET_JOBS.find(j => j.id === selectedJobId) || TARGET_JOBS[0];
   const matchResult = evaluateJobMatch(currentStudent, selectedJob);
   const layoffRisk = assessLayoffRisk(currentStudent.skills);
 
-  // Dynamic Readiness Calculation Formula from Specification:
+  // Dynamic Holistic Readiness Formula:
   // readiness = 0.40 * skill_coverage + 0.25 * interview + 0.20 * plan_completion + 0.15 * profile_quality
   const skillCoveragePct = Math.round((matchResult.matchedSkills.length / selectedJob.requiredSkills.length) * 100);
   const planCompletionPct = Math.round((completedMilestones.length / 4) * 100);
@@ -48,7 +61,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
     if (!file) return;
 
     setIsUploading(true);
-    addTrace(`[INGESTION]: Uploading PDF ${file.name} to FastAPI backend...`);
+    addTrace?.(`[INGESTION]: Uploading PDF ${file.name} to FastAPI backend...`);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -71,28 +84,38 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         adminStatus: "Pending",
         skills: data.extracted_skills,
         rawResume: data.clean_resume,
-        qualityScore: data.quality_audit.quality_score || 80,
-        weakBullets: data.quality_audit.weak_bullets || []
+        qualityScore: data.quality_audit?.quality_score || 80,
+        weakBullets: data.quality_audit?.weak_bullets || []
       });
 
       onExecutionUpdate?.(data.execution_trace, data.total_latency_ms);
-      addTrace(`[PIPELINE SUCCESS]: Fully parsed ${file.name} in ${data.total_latency_ms} ms.`);
+      addTrace?.(`[PIPELINE SUCCESS]: Fully parsed ${file.name} in ${data.total_latency_ms} ms.`);
     } catch (err) {
-      addTrace(`[UPLOAD FALLBACK]: Processed locally. ${err.message}`, 'error');
+      addTrace?.(`[UPLOAD FALLBACK]: Processed locally. ${err.message}`, 'error');
     } finally {
       setIsUploading(false);
     }
   };
 
-  const toggleMilestone = (weekNum) => {
+  const toggleMilestone = async (weekNum) => {
+  try {
+    const res = await apiClient.toggleMilestone(currentStudent.id, weekNum, overallReadiness);
+    setCompletedMilestones(res.completed_milestones);
+    // Refresh server trajectory
+    const updated = await apiClient.getStudentProgress(currentStudent.id);
+    setServerProgress(updated);
+    addTrace?.(`[PERSISTENCE]: Committed Week ${weekNum} milestone to backend event log.`);
+  } catch (err) {
+    // Local fallback
     setCompletedMilestones(prev => 
       prev.includes(weekNum) ? prev.filter(w => w !== weekNum) : [...prev, weekNum]
     );
-  };
+  }
+};
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-      {/* Top Banner & Demo Switcher */}
+      {/* Top Banner & Preset Profile Switcher */}
       <div className="bg-surface rounded-3xl p-6 sm:p-8 border border-[#E6E6E3] shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div>
           <div className="flex items-center space-x-2 text-xs text-subtle mb-1">
@@ -129,11 +152,11 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         </div>
       </div>
 
-      {/* Main Grid: Left & Right Wings */}
+      {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* LEFT COLUMN: Real PDF Drag & Drop, Concentric Dial & Layoff Radar (5 Cols) */}
+        {/* LEFT COLUMN: PDF Upload, Concentric Dial & Layoff Radar (5 Cols) */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Bento Card 1: Real PDF Upload Dropzone */}
+          {/* Card 1: Resume PDF Dropzone */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -145,7 +168,6 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               </span>
             </div>
 
-            {/* Drag & Drop Area */}
             <label className="border-2 border-dashed border-[#DCDCD8] hover:border-terracotta-500 rounded-2.5xl p-6 flex flex-col items-center justify-center text-center cursor-pointer bg-canvas/60 transition-colors">
               <Upload className="w-8 h-8 text-terracotta-500 mb-2" />
               <span className="text-xs font-bold text-obsidian">
@@ -173,10 +195,10 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </div>
           </div>
 
-          {/* Bento Card 2: Concentric Layered Readiness Dial (Matches Reference Screenshot) */}
+          {/* Card 2: Concentric Layered Readiness Dial */}
           <ConcentricReadinessDial readiness={readinessPayload} />
 
-          {/* Bento Card 3: Layoff & Market Radar */}
+          {/* Card 3: Layoff & Market Radar */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -220,9 +242,9 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Matching Dial, Interactive Tasks & Studio Mock Interview (7 Cols) */}
+        {/* RIGHT COLUMN: Matching, 6-Axis Radar, Roadmap & Interview Studio (7 Cols) */}
         <div className="lg:col-span-7 space-y-6">
-          {/* Target Role Selector & Vector Cosine Card */}
+          {/* Card 1: Target Role Selector & Vector Cosine Match */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -231,7 +253,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                   <select
                     value={selectedJobId}
                     onChange={(e) => setSelectedJobId(e.target.value)}
-                    className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian"
+                    className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none"
                   >
                     {TARGET_JOBS.map(job => (
                       <option key={job.id} value={job.id}>{job.title} ({job.tier})</option>
@@ -253,7 +275,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               </div>
             </div>
 
-            {/* SOP Guardrail Warning */}
+            {/* SOP Guardrail Alert */}
             {matchResult.sopViolations.length > 0 && (
               <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
                 <div className="flex items-center space-x-1.5 font-bold">
@@ -266,7 +288,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               </div>
             )}
 
-            {/* Skill Badges */}
+            {/* Matched & Missing Skill Badges */}
             <div className="flex flex-wrap gap-2 pt-1">
               {matchResult.matchedSkills.map((sk, idx) => (
                 <span key={idx} className="text-xs bg-emerald-50 text-emerald-800 font-semibold px-3 py-1 rounded-full border border-emerald-200">
@@ -281,7 +303,14 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </div>
           </div>
 
-          {/* Interactive 4-Week Milestone Roadmap (Dynamic Task Progression) */}
+          {/* Card 2: Interactive 6-Axis Skill Radar Chart */}
+          <SkillRadarChart
+            studentSkills={currentStudent.skills}
+            qualityScore={currentStudent.qualityScore}
+            targetRole={selectedJob.title}
+          />
+
+          {/* Card 3: Interactive 4-Week Milestone Roadmap */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -341,7 +370,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </div>
           </div>
 
-          {/* Upgraded Studio Mock Interview */}
+          {/* Card 4: Upgraded Studio Mock Interview */}
           <MockInterview
             missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : ["RAG Pipelines", "System Design"]}
             addTrace={addTrace}
@@ -350,6 +379,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         </div>
       </div>
 
+      {/* ATS Single-Column Preview Modal */}
       {isATSModalOpen && (
         <ATSPreviewModal
           student={currentStudent}
