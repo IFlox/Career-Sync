@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Lock, UserCheck, Terminal, Award } from 'lucide-react';
+import { Lock, UserCheck } from 'lucide-react';
 
 export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthModalOpen, isAdminLoggedIn, traceCount }) {
   return (
@@ -13,29 +13,30 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
           <div>
             <div className="flex items-center space-x-2">
               <span className="font-bold text-lg tracking-tight text-obsidian">CareerSync</span>
-              <span className="text-[10px] font-semibold tracking-wider uppercase px-2 py-0.5 rounded-full bg-terracotta-50 text-terracotta-600 border border-terracotta-100">
-                Agentic v2.4
+              <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full bg-terracotta-50 text-terracotta-600 border border-terracotta-100">
+                AI-Powered
               </span>
             </div>
-            <p className="text-xs text-subtle hidden sm:block">Syncing Student Skills with Industry Truth.</p>
+            <p className="text-xs text-subtle hidden sm:block">Smart Placement & Career Assistant</p>
           </div>
         </div>
 
         {/* Center Indicators */}
-        <div className="hidden md:flex items-center space-x-6 text-xs text-subtle">
+        <div className="hidden md:flex items-center space-x-4 text-xs text-subtle">
           <div className="flex items-center space-x-1.5 bg-surface px-3 py-1.5 rounded-full border border-[#E8E8E4] shadow-xs">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-medium text-obsidian">PII Guard Active</span>
-            <span className="text-emerald-700 font-semibold">(100% Masked)</span>
+            <span className="font-medium text-obsidian">Privacy Protected</span>
+            <span className="text-emerald-700 font-semibold">(Personal info safe)</span>
           </div>
+
           <div className="flex items-center space-x-1.5 bg-surface px-3 py-1.5 rounded-full border border-[#E8E8E4] shadow-xs">
-            <Terminal className="w-3.5 h-3.5 text-terracotta-500" />
-            <span>Trace Stream: </span>
-            <span className="font-semibold text-obsidian">{traceCount} events</span>
+            <span className="w-2 h-2 rounded-full bg-terracotta-500"></span>
+            <span>AI Ready:</span>
+            <span className="font-semibold text-obsidian">{traceCount} actions logged</span>
           </div>
         </div>
 
-        {/* Portal Switch Controls */}
+        {/* Navigation Buttons */}
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setActivePortal('student')}
@@ -45,7 +46,7 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
                 : 'bg-surface text-obsidian hover:bg-cardMuted border border-[#E2E2DE]'
             }`}
           >
-            Student Cockpit
+            My Dashboard
           </button>
 
           {isAdminLoggedIn ? (
@@ -58,7 +59,7 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
               }`}
             >
               <UserCheck className="w-3.5 h-3.5" />
-              <span>TPO Admin Portal</span>
+              <span>Admin Dashboard</span>
             </button>
           ) : (
             <button
@@ -66,7 +67,7 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
               className="px-4 py-2 rounded-full text-xs font-semibold flex items-center space-x-1.5 bg-surface text-subtle hover:text-obsidian hover:bg-cardMuted border border-[#E2E2DE] transition-all"
             >
               <Lock className="w-3.5 h-3.5 text-subtle" />
-              <span>Placement Cell Login</span>
+              <span>Admin Login</span>
             </button>
           )}
         </div>
