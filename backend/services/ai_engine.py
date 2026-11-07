@@ -2,11 +2,12 @@
 CareerSync Multi-Provider AI Engine
 Features:
 1. Multi-Model Cascade (llama-3.1-8b-instant -> llama3-8b-8192 -> gemma2-9b-it)
-2. Ignores terms-locked preview/audio models completely
+2. Safe Markdown-to-JSON cleaning (no crashes from LLM backticks)
 3. Automatic Failover to Gemini / Offline Engine (Zero Downtime)
 """
 
 import os
+import re
 import json
 import numpy as np
 from typing import Dict, Any, List
@@ -17,7 +18,6 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Verified free chat models on Groq (in order of speed & quality)
 CANDIDATE_GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "llama3-8b-8192",
@@ -25,18 +25,16 @@ CANDIDATE_GROQ_MODELS = [
     "mixtral-8x7b-32768"
 ]
 
-# 1. Initialize Groq Client
 groq_client = None
 if GROQ_API_KEY:
     try:
         from groq import Groq
         groq_client = Groq(api_key=GROQ_API_KEY)
-        print("[AI ENGINE] Successfully connected to Groq Cloud (Free LPU Tier).")
+        print("[AI ENGINE] Successfully connected to Groq Cloud.")
     except Exception as e:
         print(f"[AI ENGINE] Groq notice: {e}")
         groq_client = None
 
-# 2. Initialize Gemini Client (Secondary)
 gemini_client = None
 if not groq_client and GEMINI_API_KEY:
     try:
@@ -48,13 +46,18 @@ if not groq_client and GEMINI_API_KEY:
 
 
 class CareerSyncAIEngine:
-    """Multi-Provider AI Engine with automatic model cascade."""
+    @staticmethod
+    def _clean_json_text(raw_text: str) -> str:
+        """Strips markdown code blocks, backticks, and trailing whitespace from LLM output."""
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+        return cleaned
 
     @classmethod
     def _call_llm_json(cls, prompt: str, fallback_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Tries verified free models in sequence. Never calls audio or terms-locked models."""
-        
-        # --- PATH A: GROQ CASCADE ---
+        """Tries verified free models in sequence with safe JSON decoding."""
         if groq_client:
             for model_name in CANDIDATE_GROQ_MODELS:
                 try:
@@ -76,14 +79,12 @@ class CareerSyncAIEngine:
                         temperature=0.2,
                         response_format={"type": "json_object"}
                     )
-                    raw_text = chat_completion.choices[0].message.content.strip()
-                    parsed = json.loads(raw_text)
-                    return parsed
-                except Exception as e:
-                    # Model not available or terms required, try the next one in the list
+                    raw_text = chat_completion.choices[0].message.content
+                    cleaned_json = cls._clean_json_text(raw_text)
+                    return json.loads(cleaned_json)
+                except Exception:
                     continue
 
-        # --- PATH B: GEMINI SECONDARY ---
         if gemini_client:
             try:
                 from google.genai import types
@@ -95,19 +96,15 @@ class CareerSyncAIEngine:
                         temperature=0.2
                     )
                 )
-                return json.loads(response.text)
+                cleaned_json = cls._clean_json_text(response.text)
+                return json.loads(cleaned_json)
             except Exception:
                 pass
 
-        # --- PATH C: DETERMINISTIC FALLBACK (Guarantees zero crashes) ---
         return fallback_data
 
-    # =========================================================================
-    # WORKFLOW 1: VECTOR EMBEDDINGS & COSINE SIMILARITY
-    # =========================================================================
     @classmethod
     def get_embedding(cls, text: str) -> np.ndarray:
-        """768-dimensional deterministic mathematical embeddings."""
         np.random.seed(abs(hash(text)) % (10 ** 8))
         vec = np.random.randn(768).astype(np.float32)
         return vec / np.linalg.norm(vec)
@@ -120,9 +117,6 @@ class CareerSyncAIEngine:
             return 0.0
         return float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
 
-    # =========================================================================
-    # WORKFLOW 2: RESUME AUDIT & STAR REWRITES
-    # =========================================================================
     @classmethod
     def audit_resume_with_ai(cls, clean_resume_text: str) -> Dict[str, Any]:
         prompt = (
@@ -151,9 +145,6 @@ class CareerSyncAIEngine:
         }
         return cls._call_llm_json(prompt, fallback)
 
-    # =========================================================================
-    # WORKFLOW 3: ADAPTIVE MOCK INTERVIEW AGENT
-    # =========================================================================
     @classmethod
     def evaluate_interview_response_with_ai(
         cls, skill: str, question: str, candidate_answer: str, current_difficulty: int
@@ -182,9 +173,6 @@ class CareerSyncAIEngine:
         }
         return cls._call_llm_json(prompt, fallback)
 
-    # =========================================================================
-    # WORKFLOW 4: EXTERNAL URL INGESTION
-    # =========================================================================
     @classmethod
     def parse_job_link_with_ai(cls, page_text: str, url: str) -> Dict[str, Any]:
         prompt = (

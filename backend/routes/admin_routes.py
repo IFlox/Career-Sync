@@ -8,20 +8,29 @@ from data_seeds import STUDENT_DATABASE
 
 router = APIRouter(prefix="/admin", tags=["Placement Cell (TPO)"])
 
+class LoginRequest(BaseModel):
+    pin: str
+
 class StatusUpdateRequest(BaseModel):
     student_id: str
-    new_status: str  # "Approved" | "Revision Required"
+    new_status: str
 
 def verify_tpo_token(x_admin_pin: str = Header(None)):
-    """Simple, secure password gateway enforcement."""
     if x_admin_pin != "tpo_secure_2026":
-        raise HTTPException(status_code=403, detail="Invalid TPO Security PIN. Access denied.")
+        raise HTTPException(status_code=403, detail="Invalid Security PIN. Access denied.")
     return True
+
+# Backend password verification
+@router.post("/auth/verify")
+def verify_admin_pin(payload: LoginRequest):
+    if payload.pin == "tpo_secure_2026":
+        return {"status": "authorized", "token": "tpo_token_valid"}
+    raise HTTPException(status_code=401, detail="Incorrect admin password.")
 
 @router.get("/analytics/overview")
 def get_cohort_overview(authorized: bool = Depends(verify_tpo_token)):
     total = len(STUDENT_DATABASE)
-    avg_score = round(sum(s["quality_score"] for s in STUDENT_DATABASE) / total)
+    avg_score = round(sum(s["quality_score"] for s in STUDENT_DATABASE) / max(1, total))
     high_risk_count = sum(1 for s in STUDENT_DATABASE if s["cgpa"] < 6.0 or s["quality_score"] < 45)
     approved_count = sum(1 for s in STUDENT_DATABASE if s["admin_status"] == "Approved")
     sla_escalated = sum(1 for s in STUDENT_DATABASE if s["sla_hours_pending"] > 48)
@@ -60,7 +69,6 @@ def update_student_status(payload: StatusUpdateRequest, authorized: bool = Depen
 
 @router.get("/export/csv")
 def export_verified_csv(authorized: bool = Depends(verify_tpo_token)):
-    """Outputs verified batch CSV for external recruiters."""
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Student ID", "Name", "Branch", "CGPA", "Impact Score", "Top Skills", "TPO Status"])
