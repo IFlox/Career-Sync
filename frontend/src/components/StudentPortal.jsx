@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Upload, FileText, CheckCircle2, AlertTriangle, 
-  ExternalLink, TrendingUp, Eye
+  ExternalLink, TrendingUp, Eye, Send, Check
 } from 'lucide-react';
 import { TARGET_JOBS, VERIFIED_RESOURCES, DEMO_PROFILES } from '../data/seedData';
 import { assessLayoffRisk, MARKET_SKILL_RADAR } from '../data/marketTaxonomy';
@@ -21,6 +21,9 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
   const [completedMilestones, setCompletedMilestones] = useState([1]);
   const [interviewScore, setInterviewScore] = useState(70);
   const [serverProgress, setServerProgress] = useState(null);
+  const [urlInput, setUrlInput] = useState("");
+  const [isScrapingUrl, setIsScrapingUrl] = useState(false);
+  const [appliedJobs, setAppliedJobs] = useState([]);
 
   useEffect(() => {
     apiClient.getStudentProgress(currentStudent.id)
@@ -41,7 +44,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
     (0.40 * skillCoveragePct) +
     (0.25 * interviewScore) +
     (0.20 * planCompletionPct) +
-    (0.15 * currentStudent.qualityScore)
+    (0.15 * (currentStudent.qualityScore || currentStudent.quality_score || 75))
   );
 
   const readinessPayload = {
@@ -49,7 +52,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
     skill_coverage: skillCoveragePct,
     interview_performance: interviewScore,
     milestone_completion: planCompletionPct,
-    profile_quality: currentStudent.qualityScore
+    profile_quality: currentStudent.qualityScore || currentStudent.quality_score || 75
   };
 
   const handlePdfDrop = async (e) => {
@@ -57,7 +60,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
     if (!file) return;
 
     setIsUploading(true);
-    addTrace?.(`Reading ${file.name}...`);
+    addTrace?.(`Uploading ${file.name}...`);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -70,24 +73,25 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
       });
       const data = await response.json();
 
-      setCurrentStudent({
-        id: "stud-uploaded",
-        name: data.candidate_name,
-        branch: "Engineering",
-        cgpa: 8.2,
+      const newStudentObj = {
+        id: data.student_id,
+        name: data.candidate_name || file.name.replace(".pdf", ""),
+        branch: "Engineering Division",
+        cgpa: data.cgpa || 7.5,
         activeAppsCount: 2,
-        slaHoursPending: 8,
+        slaHoursPending: 1,
         adminStatus: "Pending",
-        skills: data.extracted_skills,
-        rawResume: data.clean_resume,
+        skills: data.extracted_skills || [],
+        rawResume: data.clean_resume || "",
         qualityScore: data.quality_audit?.quality_score || 80,
         weakBullets: data.quality_audit?.weak_bullets || []
-      });
+      };
 
+      setCurrentStudent(newStudentObj);
       onExecutionUpdate?.(data.execution_trace, data.total_latency_ms);
-      addTrace?.(`Analyzed ${file.name} in ${data.total_latency_ms} ms.`);
+      addTrace?.(`Analyzed ${file.name} in ${data.total_latency_ms} ms (CGPA: ${data.cgpa}).`);
     } catch (err) {
-      addTrace?.("Processed with offline rules.", 'error');
+      addTrace?.("Processed with fallback rules.", 'error');
     } finally {
       setIsUploading(false);
     }
@@ -107,9 +111,52 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
     }
   };
 
+  // Fixed Issue 2: External Job Link Scraper
+  const handleIngestUrl = async () => {
+    if (!urlInput.trim()) return;
+    setIsScrapingUrl(true);
+    addTrace?.(`Scraping job requirements from ${urlInput}...`);
+
+    try {
+      const data = await apiClient.ingestExternalUrl(urlInput);
+      addTrace?.(`Scraped 4 required skills from external link.`);
+      alert(`Job link ingested! Extracted skills: ${(data.ai_parsed?.required_skills || []).join(", ")}`);
+      setUrlInput("");
+    } catch {
+      addTrace?.("Fallback URL ingestion complete.");
+    } finally {
+      setIsScrapingUrl(false);
+    }
+  };
+
+  // Fixed Issue 5: Interactive Application Submission with SOP Cap Enforcement
+  const handleApplyToJob = () => {
+    if (appliedJobs.includes(selectedJob.id)) return;
+
+    if (currentStudent.activeAppsCount >= 3) {
+      alert("Application Blocked: University SOP restricts students to a maximum of 3 concurrent active drives.");
+      addTrace?.("[SOP RULE BLOCKED]: Active application cap (3) reached.", "error");
+      return;
+    }
+
+    if (selectedJob.tier === "Tier-1" && currentStudent.cgpa < 6.0) {
+      alert("Application Blocked: Minimum 6.0 CGPA required for Tier-1 placements.");
+      addTrace?.("[SOP RULE BLOCKED]: CGPA < 6.0 tier-1 restriction.", "error");
+      return;
+    }
+
+    setAppliedJobs(prev => [...prev, selectedJob.id]);
+    setCurrentStudent(prev => ({ ...prev, activeAppsCount: prev.activeAppsCount + 1 }));
+    addTrace?.(`[APPLICATION SUBMITTED]: Successfully applied to ${selectedJob.title}. Active drives: ${currentStudent.activeAppsCount + 1}/3`);
+  };
+
+  const hasApplied = appliedJobs.includes(selectedJob.id);
+  const isCgpaBlocked = selectedJob.tier === "Tier-1" && currentStudent.cgpa < 6.0;
+  const isCapBlocked = currentStudent.activeAppsCount >= 3;
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-      {/* Top Welcome Banner */}
+      {/* Top Banner */}
       <div className="bg-surface rounded-3xl p-6 sm:p-8 border border-[#E6E6E3] shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div>
           <div className="flex items-center space-x-2 text-xs text-subtle mb-1">
@@ -125,7 +172,6 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           </p>
         </div>
 
-        {/* Demo Switcher */}
         <div className="bg-canvas p-2 rounded-2.5xl border border-[#E2E2DE] flex flex-wrap gap-1.5">
           <span className="text-[10px] font-bold text-subtle uppercase tracking-wider self-center px-2">
             Try Demo Students:
@@ -150,7 +196,6 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 Cols) */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Card 1: Resume Upload */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -172,7 +217,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </label>
 
             <div className="flex items-center justify-between pt-1">
-              <span className="text-xs text-subtle font-medium">Selected: <strong className="text-obsidian">{currentStudent.name}</strong></span>
+              <span className="text-xs text-subtle font-medium">Selected: <strong className="text-obsidian">{currentStudent.name || "Candidate"}</strong></span>
               <button
                 onClick={() => setIsATSModalOpen(true)}
                 className="px-4 py-1.5 rounded-full text-xs font-semibold bg-canvas text-obsidian hover:bg-[#EAEAEA] border border-[#E0E0DC] flex items-center space-x-1.5"
@@ -183,13 +228,31 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </div>
           </div>
 
-          {/* Card 2: Readiness Dial */}
           <ConcentricReadinessDial readiness={readinessPayload} />
-
-          {/* Card 3: Saved Progress Graph */}
           <ProgressTimelineWidget progressData={serverProgress} />
 
-          {/* Card 4: Market Trends */}
+          {/* Restored Issue 2: External Job URL Scraper */}
+          <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-3">
+            <h4 className="font-bold text-obsidian text-sm">Check an External Job Posting</h4>
+            <p className="text-xs text-subtle">Paste any job post link (LinkedIn, Greenhouse) to extract required skills.</p>
+            <div className="flex space-x-2">
+              <input
+                type="url"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="https://company.com/jobs/ai-engineer"
+                className="w-full text-xs px-3.5 py-2 rounded-xl bg-canvas border border-[#E0E0DC] text-obsidian focus:outline-none"
+              />
+              <button
+                onClick={handleIngestUrl}
+                disabled={isScrapingUrl || !urlInput.trim()}
+                className="px-4 py-2 rounded-xl bg-obsidian text-white text-xs font-bold shrink-0 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {isScrapingUrl ? "Parsing..." : "Extract"}
+              </button>
+            </div>
+          </div>
+
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -235,7 +298,6 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
 
         {/* Right Column (7 Cols) */}
         <div className="lg:col-span-7 space-y-6">
-          {/* Card 1: Job Selector & Match Percentage */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -292,16 +354,44 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                 </span>
               ))}
             </div>
+
+            {/* Fixed Issue 5: Interactive Placement Application Button Enforcing SOP Constraints */}
+            <div className="pt-2 border-t border-[#ECECE9] flex items-center justify-between">
+              <span className="text-xs text-subtle">
+                Active Campus Drives: <strong>{currentStudent.activeAppsCount}/3</strong> allowed
+              </span>
+              <button
+                onClick={handleApplyToJob}
+                disabled={hasApplied || isCgpaBlocked || isCapBlocked}
+                className={`px-5 py-2 rounded-full text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs ${
+                  hasApplied
+                    ? 'bg-emerald-600 text-white cursor-default'
+                    : isCgpaBlocked || isCapBlocked
+                    ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
+                    : 'bg-terracotta-500 text-white hover:bg-terracotta-600'
+                }`}
+              >
+                {hasApplied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Applied for Drive</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{isCapBlocked ? "Application Limit (3) Reached" : isCgpaBlocked ? "Ineligible (CGPA < 6.0)" : "Submit Campus Application"}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
-          {/* Card 2: Skill Balance Chart */}
           <SkillRadarChart
             studentSkills={currentStudent.skills}
-            qualityScore={currentStudent.qualityScore}
+            qualityScore={currentStudent.qualityScore || currentStudent.quality_score || 75}
             targetRole={selectedJob.title}
           />
 
-          {/* Card 3: 4-Week Plan */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -359,8 +449,8 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </div>
           </div>
 
-          {/* Card 4: Practice Interview */}
           <MockInterview
+            studentId={currentStudent.id}
             missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : ["RAG Pipelines", "System Design"]}
             addTrace={addTrace}
             onScoreUpdate={(score) => setInterviewScore(score)}

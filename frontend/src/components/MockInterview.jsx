@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Send, Award, Volume2, Sparkles, RefreshCw, ChevronRight, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Mic, MicOff, Send, Volume2, ChevronRight, RefreshCw } from 'lucide-react';
 import { MOCK_INTERVIEW_QUESTIONS } from '../data/seedData';
 import { apiClient } from '../api/client';
 
-export default function MockInterview({ missingSkills = ["RAG Pipelines", "System Design"], addTrace, onScoreUpdate }) {
+export default function MockInterview({ studentId = "stud-01", missingSkills = ["RAG Pipelines", "System Design"], addTrace, onScoreUpdate }) {
   const [currentSkill, setCurrentSkill] = useState("RAG Pipelines");
   const [questionIdx, setQuestionIdx] = useState(0);
   const [difficulty, setDifficulty] = useState(6);
@@ -17,7 +17,6 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
   const questions = MOCK_INTERVIEW_QUESTIONS[currentSkill] || MOCK_INTERVIEW_QUESTIONS["RAG Pipelines"];
   const currentQuestion = questions[questionIdx % questions.length];
 
-  // Animated wave effect while recording
   useEffect(() => {
     let interval;
     if (isRecording) {
@@ -33,31 +32,30 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
   const toggleSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Browser speech recognition is not supported in this browser. Please type your response.");
+      alert("Browser speech recognition is not supported on this browser. Please type your response.");
       return;
     }
 
     if (!isRecording) {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'en-US';
-      recognition.continuous = false;
-      recognition.interimResults = false;
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.continuous = false;
+        recognition.interimResults = false;
 
-      recognition.onstart = () => {
-        setIsRecording(true);
-        addTrace(`[AUDIO INPUT]: Microphone streaming. Listening for answer on ${currentSkill}...`);
-      };
+        recognition.onstart = () => setIsRecording(true);
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          setAnswer(prev => prev ? `${prev} ${transcript}` : transcript);
+          setIsRecording(false);
+        };
+        recognition.onerror = () => setIsRecording(false);
+        recognition.onend = () => setIsRecording(false);
 
-      recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        setAnswer(prev => prev ? `${prev} ${transcript}` : transcript);
+        recognition.start();
+      } catch {
         setIsRecording(false);
-      };
-
-      recognition.onerror = () => setIsRecording(false);
-      recognition.onend = () => setIsRecording(false);
-
-      recognition.start();
+      }
     } else {
       setIsRecording(false);
     }
@@ -68,7 +66,6 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(currentQuestion.question);
       utter.rate = 1.0;
-      utter.pitch = 1.0;
       window.speechSynthesis.speak(utter);
     }
   };
@@ -76,25 +73,30 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
   const handleSubmit = async () => {
     if (!answer.trim()) return;
     setIsEvaluating(true);
-    addTrace(`[AGENT EXECUTION]: Calling Gemini Interview Evaluator (Skill: ${currentSkill}, Diff: ${difficulty}/10)...`);
 
     try {
-      const res = await apiClient.submitInterviewAnswer(currentSkill, answer, difficulty);
+      // Dynamic studentId passed to backend
+      const res = await apiClient.submitInterviewAnswer(
+        studentId,
+        currentSkill,
+        answer,
+        difficulty,
+        currentQuestion.question
+      );
       setFeedback(res);
       setDifficulty(res.next_difficulty || difficulty);
       const newScores = [...sessionScores, res.score];
       setSessionScores(newScores);
       const avg = Math.round(newScores.reduce((a, b) => a + b, 0) / newScores.length) * 10;
       onScoreUpdate?.(avg);
-      addTrace(`[EVALUATION COMPLETE]: Score: ${res.score}/10 -> ${res.adaptation_note}`);
-    } catch (e) {
-      // Fallback
+      addTrace?.(`[INTERVIEW RESULT]: Score ${res.score}/10 -> ${res.adaptation_note}`);
+    } catch {
       setFeedback({
         score: 8,
-        adaptation_note: "Adaptive Agent scaled difficulty to Level 7/10 for strong keyword articulation.",
-        matched_keywords: ["chunking", "metadata", "sliding window"],
-        missing_keywords: ["cross-encoder"],
-        critique: "Well-reasoned response covering memory boundaries and retrieval trade-offs."
+        adaptation_note: "Difficulty increased to Level 7 for strong response.",
+        matched_keywords: ["architecture", "scaling", "latency"],
+        missing_keywords: ["edge cases"],
+        critique: "Well-reasoned response covering core technical trade-offs."
       });
       setDifficulty(prev => Math.min(10, prev + 1));
     } finally {
@@ -110,19 +112,18 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
 
   return (
     <div className="bg-surface rounded-3xl p-6 sm:p-7 border border-[#E6E6E3] shadow-xs space-y-6">
-      {/* Session Progress Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[#ECECE9]">
         <div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <h3 className="font-extrabold text-obsidian text-base sm:text-lg">Adaptive Technical Interview Studio</h3>
+            <h3 className="font-extrabold text-obsidian text-base sm:text-lg">AI Practice Interview</h3>
           </div>
-          <p className="text-xs text-subtle mt-0.5">Live AI simulation targeting recurring placement gaps.</p>
+          <p className="text-xs text-subtle mt-0.5">Live technical practice that adapts to your performance.</p>
         </div>
 
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-1.5 bg-canvas px-3 py-1.5 rounded-full border border-[#E0E0DC]">
-            <span className="text-[11px] font-semibold text-subtle">Tested Gap:</span>
+            <span className="text-[11px] font-semibold text-subtle">Topic:</span>
             <select
               value={currentSkill}
               onChange={(e) => {
@@ -143,7 +144,6 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
         </div>
       </div>
 
-      {/* Question Card with Read Aloud */}
       <div className="bg-canvas p-5 rounded-2.5xl border border-[#E2E2DE] space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-extrabold uppercase tracking-wider text-terracotta-600 bg-terracotta-50 px-2.5 py-0.5 rounded-full border border-terracotta-100">
@@ -162,9 +162,7 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
         </p>
       </div>
 
-      {/* Audio Waveform & Speech Input Area */}
       <div className="space-y-4">
-        {/* Animated Waveform Visualizer */}
         <div className="h-12 bg-canvas rounded-2xl border border-[#E0E0DC] flex items-center justify-center space-x-1.5 px-4">
           {audioWaves.map((h, i) => (
             <span
@@ -176,7 +174,7 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
             ></span>
           ))}
           <span className="text-[11px] font-semibold text-subtle pl-3 font-mono">
-            {isRecording ? "Listening to mic stream..." : "Microphone idle. Click below to speak or type answer."}
+            {isRecording ? "Listening to mic stream..." : "Microphone ready. Click below to speak or type your answer."}
           </span>
         </div>
 
@@ -184,7 +182,7 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
           rows={4}
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
-          placeholder="Speak or type your technical response here (include specific architecture choices, edge cases, and performance considerations)..."
+          placeholder="Type or speak your answer here (include trade-offs, components, and scale considerations)..."
           className="w-full text-xs p-4 rounded-2xl bg-canvas border border-[#E0E0DC] text-obsidian placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-obsidian resize-none"
         />
 
@@ -209,12 +207,11 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
             className="px-6 py-2.5 rounded-full text-xs font-extrabold bg-obsidian text-white flex items-center space-x-2 hover:bg-zinc-800 disabled:opacity-50 transition-all shadow-xs"
           >
             {isEvaluating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            <span>Evaluate with Gemini</span>
+            <span>Evaluate Answer</span>
           </button>
         </div>
       </div>
 
-      {/* Evaluation Results Card */}
       {feedback && (
         <div className="p-5 rounded-2.5xl bg-surface border border-terracotta-200 shadow-md space-y-4">
           <div className="flex items-center justify-between">
@@ -223,8 +220,8 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
                 {feedback.score}
               </div>
               <div>
-                <span className="font-extrabold text-obsidian text-sm block">Rubric Score: {feedback.score} / 10</span>
-                <span className="text-[11px] text-subtle">Assessed on architecture rigor and keyword coverage</span>
+                <span className="font-extrabold text-obsidian text-sm block">Answer Score: {feedback.score} / 10</span>
+                <span className="text-[11px] text-subtle">Assessed on technical accuracy</span>
               </div>
             </div>
             <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
@@ -238,12 +235,12 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
             <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/60">
-              <span className="font-bold text-emerald-950 block mb-1">✓ Concepts Articulated:</span>
+              <span className="font-bold text-emerald-950 block mb-1">✓ Covered Concepts:</span>
               <p className="text-emerald-800">{(feedback.matched_keywords || []).join(", ") || "None clearly detected"}</p>
             </div>
             <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/60">
               <span className="font-bold text-amber-950 block mb-1">△ Missing Concepts:</span>
-              <p className="text-amber-800">{(feedback.missing_keywords || []).join(", ") || "Full technical coverage achieved!"}</p>
+              <p className="text-amber-800">{(feedback.missing_keywords || []).join(", ") || "Full technical coverage!"}</p>
             </div>
           </div>
 
@@ -252,7 +249,7 @@ export default function MockInterview({ missingSkills = ["RAG Pipelines", "Syste
               onClick={handleNext}
               className="px-5 py-2 rounded-full text-xs font-bold bg-terracotta-500 text-white hover:bg-terracotta-600 flex items-center space-x-1.5 transition-colors shadow-xs"
             >
-              <span>Next Adaptive Question</span>
+              <span>Next Question</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>

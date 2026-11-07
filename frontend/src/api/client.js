@@ -1,7 +1,7 @@
 const API_BASE = '/api/v1';
 
 export const apiClient = {
-  // Student Endpoints
+  // Student API
   async processResume(rawText, targetJobId = 'job-ai-sys') {
     const res = await fetch(`${API_BASE}/students/resume/process`, {
       method: 'POST',
@@ -16,8 +16,21 @@ export const apiClient = {
     return res.json();
   },
 
-  async getRoadmap(studentId, jobId = 'job-ai-sys') {
-    const res = await fetch(`${API_BASE}/students/roadmap/${studentId}?job_id=${jobId}`);
+  async getStudentProgress(studentId) {
+    const res = await fetch(`${API_BASE}/students/${studentId}/progress`);
+    if (!res.ok) throw new Error('Failed to fetch progress');
+    return res.json();
+  },
+
+  async toggleMilestone(studentId, weekNumber, currentReadiness) {
+    const res = await fetch(`${API_BASE}/students/${studentId}/milestones/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        week_number: weekNumber,
+        current_readiness: currentReadiness
+      })
+    });
     return res.json();
   },
 
@@ -26,13 +39,14 @@ export const apiClient = {
     return res.json();
   },
 
-  async submitInterviewAnswer(skill, answerText, currentDifficulty) {
+  async submitInterviewAnswer(studentId, skill, answerText, currentDifficulty, questionText = "") {
     const res = await fetch(`${API_BASE}/students/interview/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        question_id: 'dynamic',
+        student_id: studentId || "stud-01",
         skill,
+        question_text: questionText,
         answer_text: answerText,
         current_difficulty: currentDifficulty,
       }),
@@ -49,12 +63,14 @@ export const apiClient = {
     return res.json();
   },
 
-  // Placement Cell (TPO) Endpoints
-  async getAdminOverview(adminPin = 'tpo_secure_2026') {
-    const res = await fetch(`${API_BASE}/admin/analytics/overview`, {
-      headers: { 'x-admin-pin': adminPin },
+  // Admin API
+  async verifyAdminPin(pin) {
+    const res = await fetch(`${API_BASE}/admin/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
     });
-    if (!res.ok) throw new Error('Unauthorized');
+    if (!res.ok) throw new Error('Invalid PIN');
     return res.json();
   },
 
@@ -74,25 +90,6 @@ export const apiClient = {
         'x-admin-pin': adminPin,
       },
       body: JSON.stringify({ student_id: studentId, new_status: newStatus }),
-    });
-    return res.json();
-  },
-
-  // Add these inside apiClient object:
-  async getStudentProgress(studentId) {
-    const res = await fetch(`${API_BASE}/students/${studentId}/progress`);
-    if (!res.ok) throw new Error('Failed to fetch progress');
-    return res.json();
-  },
-
-  async toggleMilestone(studentId, weekNumber, currentReadiness) {
-    const res = await fetch(`${API_BASE}/students/${studentId}/milestones/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        week_number: weekNumber,
-        current_readiness: currentReadiness
-      })
     });
     return res.json();
   },

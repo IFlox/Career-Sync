@@ -80,6 +80,13 @@ export const VERIFIED_RESOURCES = {
     duration: "5 Hours",
     verified: true
   },
+  "FastAPI": {
+    title: "High-Performance Python Backends with FastAPI",
+    provider: "Official FastAPI Documentation",
+    url: "https://fastapi.tiangolo.com/tutorial/",
+    duration: "6 Hours",
+    verified: true
+  },
   "Terraform": {
     title: "Automated Infrastructure as Code",
     provider: "HashiCorp Learn",
@@ -109,26 +116,6 @@ export const HACKATHONS_SEEDS = [
     deadline: "In 25 Days",
     tag: "Algorithms & Systems",
     link: "https://campuscommune.tcs.com/en-in/intro/contests/codevita"
-  },
-  {
-    id: "hack-3",
-    name: "ETHIndia 2026",
-    organizer: "Devfolio Global",
-    type: "International Web3 & Systems",
-    prize: "$120,000 Total Pool",
-    deadline: "In 40 Days",
-    tag: "High-Concurrency",
-    link: "https://ethindia.co"
-  },
-  {
-    id: "hack-4",
-    name: "Adobe GenAI University Hackathon",
-    organizer: "Adobe Systems",
-    type: "Enterprise Contest",
-    prize: "Summer Internships & PPE Offers",
-    deadline: "In 12 Days",
-    tag: "Creative AI & Agents",
-    link: "https://www.adobe.com"
   }
 ];
 
@@ -146,13 +133,7 @@ export const DEMO_PROFILES = [
     adminStatus: "Approved",
     targetRole: "job-ai-sys",
     skills: ["Python", "PyTorch", "FastAPI", "Vector Embeddings", "Docker", "SQL", "Git"],
-    rawResume: `PRIYA SHARMA | Computer Science | priya.sharma@campus.edu | +91 98765 43210
-Education: B.Tech CSE, 2026. CGPA: 8.8.
-Summary: AI Systems enthusiast experienced in vector embeddings, neural retrieval and microservices.
-Projects:
-• Architected RAG pipeline with Pinecone and FastAPI, reducing search latency by 42% across 50,000 technical papers.
-• Built distributed PyTorch training pipeline utilizing multi-GPU nodes with Docker containers.
-• Designed real-time event analytics backend using Redis pub-sub serving 1,200 requests/second.`,
+    rawResume: `PRIYA SHARMA | Computer Science | priya.sharma@campus.edu\n• Architected RAG pipeline with Pinecone and FastAPI, reducing search latency by 42% across 50,000 papers.\n• Built distributed PyTorch training pipeline utilizing multi-GPU nodes with Docker containers.`,
     qualityScore: 88,
     weakBullets: []
   },
@@ -169,22 +150,12 @@ Projects:
     adminStatus: "Pending",
     targetRole: "job-backend",
     skills: ["Node.js", "REST APIs", "PostgreSQL", "Git", "JavaScript"],
-    rawResume: `RAHUL VERMA | IT Branch | rahul.v@campus.edu | +91 91234 56789
-Education: B.Tech IT, 2026. CGPA: 6.8.
-Summary: Backend engineer with core Node.js and PostgreSQL development experience.
-Projects:
-• Built a backend using Node.js for an e-commerce grocery store.
-• Handled database queries in PostgreSQL and created basic routes.
-• Integrated Stripe payment gateway API for checkout flow.`,
+    rawResume: `RAHUL VERMA | IT Branch\n• Built a backend using Node.js for an e-commerce grocery store.\n• Handled database queries in PostgreSQL and created basic routes.`,
     qualityScore: 58,
     weakBullets: [
       {
         original: "Built a backend using Node.js for an e-commerce grocery store.",
         improved: "Engineered scalable Node.js REST backend supporting 5,000+ daily orders with 99.8% uptime."
-      },
-      {
-        original: "Handled database queries in PostgreSQL and created basic routes.",
-        improved: "Optimized complex PostgreSQL joins and indexing structures, decreasing average API response time by 35%."
       }
     ]
   },
@@ -197,59 +168,83 @@ Projects:
     branch: "Electronics & Communication",
     cgpa: 5.6,
     activeAppsCount: 3,
-    slaHoursPending: 54, // Triggers SLA Overdue Escalation (> 48 hrs)
+    slaHoursPending: 54,
     adminStatus: "Revision Required",
     targetRole: "job-ai-sys",
     skills: ["Manual QA", "Basic Python", "HTML", "CSS"],
-    rawResume: `AMIT PATEL | amit.patel@campus.edu | +91 90000 11111 | Flat 12, Sunrise Apts
-Education: B.Tech ECE, 2026. CGPA: 5.6.
-Summary: Entry level developer interested in software testing and AI systems.
-Experience:
-• Helped test manual UI forms for student council club website.
-• Wrote basic Python scripts for assignment files.`,
+    rawResume: `AMIT PATEL | ECE Branch\n• Helped test manual UI forms for student council club website.\n• Wrote basic Python scripts for assignment files.`,
     qualityScore: 35,
     weakBullets: [
       {
         original: "Helped test manual UI forms for student council club website.",
-        improved: "Executed regression testing protocol covering 45+ UI submission workflows, cataloging 18 critical edge cases."
-      },
-      {
-        original: "Wrote basic Python scripts for assignment files.",
-        improved: "Automated recurring file processing batch jobs in Python, saving 4 hours of manual processing weekly."
+        improved: "Automated test regression suite covering 45+ UI workflows, cataloging 18 critical edge cases."
       }
     ]
   }
 ];
 
+// Comprehensive Question Bank for All Common Missing Skills
 export const MOCK_INTERVIEW_QUESTIONS = {
   "RAG Pipelines": [
     {
       level: "Intermediate",
-      question: "How do you mitigate 'chunk boundary bleeding' and lost context when splitting long-form documentation into vector embeddings for RAG?",
-      idealKeywords: ["sliding window", "overlap", "metadata", "hierarchical chunking", "token limit"],
+      question: "How do you handle chunk boundary overlap and lost context when splitting documents into embeddings for RAG?",
+      idealKeywords: ["sliding window", "overlap", "metadata", "hierarchical chunking"],
       difficulty: 6
     },
     {
       level: "Advanced",
-      question: "Describe your strategy for re-ranking retrieved vector matches before feeding them to an LLM context window to prevent hallucinations.",
-      idealKeywords: ["cross-encoder", "reciprocal rank fusion", "cohere rerank", "top-k", "cosine similarity threshold"],
+      question: "Explain the role of a cross-encoder re-ranker before feeding retrieved vectors to an LLM context window.",
+      idealKeywords: ["cross-encoder", "re-ranking", "cohere", "top-k", "hallucination"],
       difficulty: 8
     }
   ],
-  "System Design": [
+  "Vector Embeddings": [
     {
       level: "Intermediate",
-      question: "How would you design an idempotent payment processing API to prevent duplicate charges during network timeouts?",
-      idealKeywords: ["idempotency key", "redis lock", "database transaction", "unique constraint", "retry token"],
-      difficulty: 7
+      question: "What is the difference between Cosine Distance, Dot Product, and Euclidean (L2) distance for vector search?",
+      idealKeywords: ["normalization", "magnitude", "angle", "high-dimensional"],
+      difficulty: 6
     }
   ],
   "Docker": [
     {
       level: "Foundational",
-      question: "What is the difference between an ephemeral container layer and a Docker volume, and why should you use multi-stage builds in production?",
-      idealKeywords: ["persistence", "image size", "build artifacts", "security attack surface", "layer caching"],
+      question: "Why should you use multi-stage builds in production Dockerfiles, and how do layers affect image size?",
+      idealKeywords: ["multi-stage", "build artifacts", "layer caching", "attack surface"],
       difficulty: 5
+    }
+  ],
+  "Kubernetes": [
+    {
+      level: "Intermediate",
+      question: "Explain the difference between a Deployment, a StatefulSet, and a DaemonSet in Kubernetes.",
+      idealKeywords: ["persistent storage", "node-level pods", "replicas", "rolling updates"],
+      difficulty: 7
+    }
+  ],
+  "System Design": [
+    {
+      level: "Intermediate",
+      question: "How would you design an idempotent payment processing API to prevent double-charging on network retry?",
+      idealKeywords: ["idempotency key", "redis lock", "database transaction", "unique constraint"],
+      difficulty: 7
+    }
+  ],
+  "FastAPI": [
+    {
+      level: "Foundational",
+      question: "How does FastAPI achieve high performance using ASGI, Pydantic, and async/await syntax in Python?",
+      idealKeywords: ["event loop", "starlette", "concurrency", "type hints", "pydantic"],
+      difficulty: 6
+    }
+  ],
+  "Redis": [
+    {
+      level: "Intermediate",
+      question: "What cache eviction policies does Redis support, and when would you use Cache-Aside vs Write-Through?",
+      idealKeywords: ["lru", "lfu", "ttl", "cache invalidation", "stale data"],
+      difficulty: 6
     }
   ]
 };

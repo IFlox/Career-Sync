@@ -1,7 +1,7 @@
 import React from 'react';
-import { Lock, UserCheck } from 'lucide-react';
+import { Lock, UserCheck, LogOut } from 'lucide-react';
 
-export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthModalOpen, isAdminLoggedIn, traceCount }) {
+export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthModalOpen, isAdminLoggedIn, onAdminLogout, traceCount }) {
   return (
     <header className="sticky top-0 z-40 bg-canvas/80 backdrop-blur-md border-b border-[#E6E6E3] px-6 py-3.5">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -50,17 +50,26 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
           </button>
 
           {isAdminLoggedIn ? (
-            <button
-              onClick={() => setActivePortal('admin')}
-              className={`px-4 py-2 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all ${
-                activePortal === 'admin'
-                  ? 'bg-terracotta-500 text-white shadow-sm'
-                  : 'bg-terracotta-50 text-terracotta-600 hover:bg-terracotta-100 border border-terracotta-100'
-              }`}
-            >
-              <UserCheck className="w-3.5 h-3.5" />
-              <span>Admin Dashboard</span>
-            </button>
+            <div className="flex items-center space-x-1.5">
+              <button
+                onClick={() => setActivePortal('admin')}
+                className={`px-4 py-2 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all ${
+                  activePortal === 'admin'
+                    ? 'bg-terracotta-500 text-white shadow-sm'
+                    : 'bg-terracotta-50 text-terracotta-600 hover:bg-terracotta-100 border border-terracotta-100'
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Admin Dashboard</span>
+              </button>
+              <button
+                onClick={onAdminLogout}
+                className="p-2 rounded-full bg-surface hover:bg-rose-50 text-subtle hover:text-rose-600 border border-[#E2E2DE] transition-all"
+                title="Log Out of Admin"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
           ) : (
             <button
               onClick={() => setIsAdminAuthModalOpen(true)}
