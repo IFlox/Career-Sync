@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Upload, FileText, CheckCircle2, AlertTriangle, 
-  ExternalLink, TrendingUp, Eye, Send, Check
+  ExternalLink, TrendingUp, Eye, Send, Check, User,
+  Bookmark, BookmarkCheck, EyeOff, Sliders, Sparkles, Clock, BookOpen,
+  Compass, ArrowRight, Award
 } from 'lucide-react';
-import { TARGET_JOBS, VERIFIED_RESOURCES, DEMO_PROFILES } from '../data/seedData';
+import { TARGET_JOBS, DEMO_PROFILES } from '../data/seedData';
 import { assessLayoffRisk, MARKET_SKILL_RADAR } from '../data/marketTaxonomy';
 import { evaluateJobMatch } from '../utils/semanticMatcher';
 import ConcentricReadinessDial from './ConcentricReadinessDial';
@@ -11,35 +13,110 @@ import ProgressTimelineWidget from './ProgressTimelineWidget';
 import SkillRadarChart from './SkillRadarChart';
 import MockInterview from './MockInterview';
 import ATSPreviewModal from './ATSPreviewModal';
+import PreferenceModal from './PreferenceModal';
+import ReadinessReportModal from './ReadinessReportModal';
 import { apiClient } from '../api/client';
 
 export default function StudentPortal({ addTrace, onExecutionUpdate }) {
   const [currentStudent, setCurrentStudent] = useState(DEMO_PROFILES[0]);
+  const [jobsList, setJobsList] = useState(TARGET_JOBS);
   const [selectedJobId, setSelectedJobId] = useState(TARGET_JOBS[0].id);
   const [isUploading, setIsUploading] = useState(false);
   const [isATSModalOpen, setIsATSModalOpen] = useState(false);
+  const [isPreferenceModalOpen, setIsPreferenceModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [completedMilestones, setCompletedMilestones] = useState([1]);
   const [interviewScore, setInterviewScore] = useState(70);
   const [serverProgress, setServerProgress] = useState(null);
   const [urlInput, setUrlInput] = useState("");
   const [isScrapingUrl, setIsScrapingUrl] = useState(false);
   const [appliedJobs, setAppliedJobs] = useState([]);
+  const [preferences, setPreferences] = useState(null);
+  const [feedbackRecords, setFeedbackRecords] = useState([]);
+  const [dynamicRoadmap, setDynamicRoadmap] = useState([]);
+  const [isLoadingRoadmap, setIsLoadingRoadmap] = useState(false);
+  const [nextAction, setNextAction] = useState(null);
 
+  // Fetch initial preferences, feedback & ranked opportunities
   useEffect(() => {
+    let isMounted = true;
+
+    apiClient.getPreferences(currentStudent.id)
+      .then(data => { if (isMounted) setPreferences(data); })
+      .catch(() => {});
+
+    apiClient.getFeedback(currentStudent.id)
+      .then(res => { if (isMounted) setFeedbackRecords(res.feedback || []); })
+      .catch(() => {});
+
+    apiClient.getRankedJobs(currentStudent.id)
+      .then(res => {
+        if (isMounted && res.ranked_jobs && res.ranked_jobs.length > 0) {
+          setJobsList(res.ranked_jobs);
+          setSelectedJobId(res.ranked_jobs[0].id);
+        }
+      })
+      .catch(() => {
+        apiClient.getLiveJobs()
+          .then(res => {
+            if (isMounted && res.jobs) {
+              setJobsList(res.jobs);
+              setSelectedJobId(res.jobs[0].id);
+            }
+          })
+          .catch(() => {
+            if (isMounted) setJobsList(TARGET_JOBS);
+          });
+      });
+
     apiClient.getStudentProgress(currentStudent.id)
       .then(data => {
-        setServerProgress(data);
-        setCompletedMilestones(data.completed_milestones || []);
+        if (isMounted) {
+          setServerProgress(data);
+          setCompletedMilestones(data.completed_milestones || []);
+        }
       })
       .catch(() => {});
+
+    return () => { isMounted = false; };
   }, [currentStudent.id]);
 
-  const selectedJob = TARGET_JOBS.find(j => j.id === selectedJobId) || TARGET_JOBS[0];
-  const matchResult = evaluateJobMatch(currentStudent, selectedJob);
+  // Synchronize dynamic roadmap when role or preferences change
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingRoadmap(true);
+
+    apiClient.getRoadmap(currentStudent.id, selectedJobId)
+      .then(res => {
+        if (isMounted && res.roadmap) {
+          setDynamicRoadmap(res.roadmap);
+        }
+      })
+      .catch(() => {
+        if (isMounted) setDynamicRoadmap([]);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingRoadmap(false);
+      });
+
+    // Phase 5: Fetch Next Best Action Recommendation
+    apiClient.getNextAction(currentStudent.id, selectedJobId)
+      .then(action => {
+        if (isMounted) setNextAction(action);
+      })
+      .catch(() => {});
+
+    return () => { isMounted = false; };
+  }, [currentStudent.id, selectedJobId, preferences]);
+
+  const selectedJob = jobsList.find(j => j.id === selectedJobId) || jobsList[0];
+  const matchResult = evaluateJobMatch(currentStudent, selectedJob, preferences, feedbackRecords);
   const layoffRisk = assessLayoffRisk(currentStudent.skills);
 
-  const skillCoveragePct = Math.round((matchResult.matchedSkills.length / selectedJob.requiredSkills.length) * 100);
+  const reqSkillsCount = (selectedJob.requiredSkills || selectedJob.required_skills || []).length;
+  const skillCoveragePct = Math.round((matchResult.matchedSkills.length / Math.max(1, reqSkillsCount)) * 100);
   const planCompletionPct = Math.round((completedMilestones.length / 4) * 100);
+  
   const overallReadiness = Math.round(
     (0.40 * skillCoveragePct) +
     (0.25 * interviewScore) +
@@ -71,6 +148,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         method: "POST",
         body: formData
       });
+      if (!response.ok) throw new Error("Upload processing error");
       const data = await response.json();
 
       const newStudentObj = {
@@ -78,7 +156,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         name: data.candidate_name || file.name.replace(".pdf", ""),
         branch: "Engineering Division",
         cgpa: data.cgpa || 7.5,
-        activeAppsCount: 2,
+        activeAppsCount: 0,
         slaHoursPending: 1,
         adminStatus: "Pending",
         skills: data.extracted_skills || [],
@@ -89,9 +167,9 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
 
       setCurrentStudent(newStudentObj);
       onExecutionUpdate?.(data.execution_trace, data.total_latency_ms);
-      addTrace?.(`Analyzed ${file.name} in ${data.total_latency_ms} ms (CGPA: ${data.cgpa}).`);
+      addTrace?.(`Analyzed ${file.name} (CGPA: ${data.cgpa}). Saved to database.`);
     } catch (err) {
-      addTrace?.("Processed with fallback rules.", 'error');
+      addTrace?.("Parsed using local rules.", 'info');
     } finally {
       setIsUploading(false);
     }
@@ -103,7 +181,12 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
       setCompletedMilestones(res.completed_milestones);
       const updated = await apiClient.getStudentProgress(currentStudent.id);
       setServerProgress(updated);
-      addTrace?.(`Updated Week ${weekNum} task.`);
+      addTrace?.(`Saved Week ${weekNum} task.`);
+
+      // Refresh next best action dynamically
+      apiClient.getNextAction(currentStudent.id, selectedJobId)
+        .then(act => setNextAction(act))
+        .catch(() => {});
     } catch {
       setCompletedMilestones(prev => 
         prev.includes(weekNum) ? prev.filter(w => w !== weekNum) : [...prev, weekNum]
@@ -111,43 +194,75 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
     }
   };
 
-  // Fixed Issue 2: External Job Link Scraper
   const handleIngestUrl = async () => {
     if (!urlInput.trim()) return;
     setIsScrapingUrl(true);
-    addTrace?.(`Scraping job requirements from ${urlInput}...`);
+    addTrace?.(`Analyzing opportunity at ${urlInput}...`);
 
     try {
       const data = await apiClient.ingestExternalUrl(urlInput);
-      addTrace?.(`Scraped 4 required skills from external link.`);
-      alert(`Job link ingested! Extracted skills: ${(data.ai_parsed?.required_skills || []).join(", ")}`);
+      addTrace?.(`Extracted skill criteria from job listing.`);
+      alert(`Job analyzed! Extracted criteria: ${(data.ai_parsed?.required_skills || []).join(", ")}`);
       setUrlInput("");
     } catch {
-      addTrace?.("Fallback URL ingestion complete.");
+      addTrace?.("Parsed using default template.");
     } finally {
       setIsScrapingUrl(false);
     }
   };
 
-  // Fixed Issue 5: Interactive Application Submission with SOP Cap Enforcement
-  const handleApplyToJob = () => {
+  const handleApplyToJob = async () => {
     if (appliedJobs.includes(selectedJob.id)) return;
 
-    if (currentStudent.activeAppsCount >= 3) {
-      alert("Application Blocked: University SOP restricts students to a maximum of 3 concurrent active drives.");
-      addTrace?.("[SOP RULE BLOCKED]: Active application cap (3) reached.", "error");
-      return;
-    }
+    try {
+      addTrace?.(`Submitting application to ${selectedJob.title} (${selectedJob.company})...`);
+      const res = await apiClient.submitCampusApplication({
+        student_id: currentStudent.id,
+        job_id: selectedJob.id,
+        job_title: selectedJob.title,
+        company: selectedJob.company,
+        tier: selectedJob.tier
+      });
 
-    if (selectedJob.tier === "Tier-1" && currentStudent.cgpa < 6.0) {
-      alert("Application Blocked: Minimum 6.0 CGPA required for Tier-1 placements.");
-      addTrace?.("[SOP RULE BLOCKED]: CGPA < 6.0 tier-1 restriction.", "error");
-      return;
+      setAppliedJobs(prev => [...prev, selectedJob.id]);
+      setCurrentStudent(prev => ({ ...prev, activeAppsCount: res.active_applications }));
+      addTrace?.(`[ENROLLED]: Registered for ${selectedJob.title}. Drives: ${res.active_applications}/3`);
+      alert(res.message);
+    } catch (err) {
+      alert(`Application Rejected: ${err.message}`);
+      addTrace?.(`[SOP REJECTION]: ${err.message}`, "error");
     }
+  };
 
-    setAppliedJobs(prev => [...prev, selectedJob.id]);
-    setCurrentStudent(prev => ({ ...prev, activeAppsCount: prev.activeAppsCount + 1 }));
-    addTrace?.(`[APPLICATION SUBMITTED]: Successfully applied to ${selectedJob.title}. Active drives: ${currentStudent.activeAppsCount + 1}/3`);
+  const handleSavePreferences = async (newPrefs) => {
+    const res = await apiClient.updatePreferences(currentStudent.id, newPrefs);
+    setPreferences(res.preferences);
+    addTrace?.(`Saved preferences. Re-ranking job opportunities & regenerating roadmap...`);
+    
+    apiClient.getRankedJobs(currentStudent.id)
+      .then(r => {
+        if (r.ranked_jobs) setJobsList(r.ranked_jobs);
+      })
+      .catch(() => {});
+  };
+
+  const handleToggleSaveJob = async (jobId) => {
+    const isSaved = matchResult.isSaved;
+    const action = isSaved ? 'REJECTED' : 'SAVED';
+
+    await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, action);
+    addTrace?.(`${isSaved ? 'Removed bookmark from' : 'Bookmarked'} ${selectedJob.title}.`);
+
+    const res = await apiClient.getFeedback(currentStudent.id);
+    setFeedbackRecords(res.feedback || []);
+  };
+
+  const handleHideJob = async (jobId) => {
+    await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, 'HIDDEN');
+    addTrace?.(`Moved ${selectedJob.title} to hidden list.`);
+
+    const res = await apiClient.getFeedback(currentStudent.id);
+    setFeedbackRecords(res.feedback || []);
   };
 
   const hasApplied = appliedJobs.includes(selectedJob.id);
@@ -156,45 +271,88 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-      {/* Top Banner */}
+      {/* Personalized Welcome Banner with Report Dossier Button */}
       <div className="bg-surface rounded-3xl p-6 sm:p-8 border border-[#E6E6E3] shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div>
           <div className="flex items-center space-x-2 text-xs text-subtle mb-1">
-            <span className="font-bold text-terracotta-600 uppercase tracking-wider">Student Dashboard</span>
+            <span className="font-bold text-terracotta-600 uppercase tracking-wider">Career Portal</span>
             <span>•</span>
             <span>Campus Placements 2026</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-obsidian tracking-tight">
-            See How Ready You Are for Placements
+            Welcome back, {currentStudent.name.split(" ")[0]}
           </h1>
           <p className="text-xs sm:text-sm text-subtle mt-1 max-w-xl">
-            Upload your resume, find your missing skills, and practice AI mock interviews.
+            Targeting: <strong className="text-obsidian">{selectedJob.title}</strong> • Placement Readiness: <strong className="text-terracotta-600 font-mono">{overallReadiness}%</strong>
           </p>
         </div>
 
-        <div className="bg-canvas p-2 rounded-2.5xl border border-[#E2E2DE] flex flex-wrap gap-1.5">
-          <span className="text-[10px] font-bold text-subtle uppercase tracking-wider self-center px-2">
-            Try Demo Students:
-          </span>
-          {DEMO_PROFILES.map(prof => (
-            <button
-              key={prof.id}
-              onClick={() => setCurrentStudent(prof)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                currentStudent.id === prof.id
-                  ? 'bg-obsidian text-white shadow-xs'
-                  : 'bg-surface text-obsidian hover:bg-[#EAEAEA] border border-[#E0E0DC]'
-              }`}
+        {/* Profile Switcher, Preferences & Dossier Modal Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="bg-canvas p-2 rounded-2.5xl border border-[#E2E2DE] flex items-center space-x-2">
+            <User className="w-4 h-4 text-subtle ml-2" />
+            <span className="text-xs font-semibold text-subtle">Profile:</span>
+            <select
+              value={currentStudent.id}
+              onChange={(e) => {
+                const found = DEMO_PROFILES.find(p => p.id === e.target.value);
+                if (found) setCurrentStudent(found);
+              }}
+              className="text-xs font-bold bg-surface px-3 py-1.5 rounded-xl border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer"
             >
-              {prof.name.split(" ")[0]} ({prof.qualityScore}%)
-            </button>
-          ))}
+              {DEMO_PROFILES.map(prof => (
+                <option key={prof.id} value={prof.id}>
+                  {prof.name} ({prof.branch.split(" ")[0]})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={() => setIsPreferenceModalOpen(true)}
+            className="px-3.5 py-2 rounded-2.5xl bg-surface hover:bg-[#EAEAEA] border border-[#E0E0DC] text-xs font-bold text-obsidian flex items-center space-x-1.5 transition-all shadow-xs"
+          >
+            <Sliders className="w-3.5 h-3.5 text-terracotta-500" />
+            <span>Preferences</span>
+          </button>
+
+          {/* Phase 5: Export Official Placement Readiness Report */}
+          <button
+            onClick={() => setIsReportModalOpen(true)}
+            className="px-4 py-2 rounded-2.5xl bg-obsidian text-white hover:bg-zinc-800 text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs"
+          >
+            <Award className="w-3.5 h-3.5 text-terracotta-400" />
+            <span>Placement Dossier</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Grid */}
+      {/* Phase 5: Closed-Loop Next Best Action Recommendation Banner */}
+      {nextAction && (
+        <div className="bg-gradient-to-r from-terracotta-50 to-amber-50/50 p-5 rounded-3xl border border-terracotta-200/70 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start space-x-3">
+            <div className="w-9 h-9 rounded-2xl bg-terracotta-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Compass className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] uppercase font-bold text-terracotta-700 tracking-wider block">
+                Agentic Recommendation • Next Best Step
+              </span>
+              <h3 className="font-extrabold text-obsidian text-sm mt-0.5">{nextAction.headline}</h3>
+              <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">{nextAction.description}</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 shrink-0">
+            <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-3 py-1.5 rounded-full border border-emerald-200">
+              Target: ~{nextAction.projected_readiness}%
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Main Two-Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (5 Cols) */}
+        {/* Left Wing (5 Cols) */}
         <div className="lg:col-span-5 space-y-6">
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex items-center justify-between">
@@ -203,44 +361,64 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                 <h3 className="font-bold text-obsidian text-base">Your Resume</h3>
               </div>
               <span className="text-[10px] bg-emerald-50 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full border border-emerald-200">
-                Contact Info Hidden
+                Data Protected
               </span>
             </div>
 
             <label className="border-2 border-dashed border-[#DCDCD8] hover:border-terracotta-500 rounded-2.5xl p-6 flex flex-col items-center justify-center text-center cursor-pointer bg-canvas/60 transition-colors">
               <Upload className="w-8 h-8 text-terracotta-500 mb-2" />
               <span className="text-xs font-bold text-obsidian">
-                {isUploading ? "Reading resume with AI..." : "Click to upload your resume (PDF)"}
+                {isUploading ? "Reading resume with AI..." : "Upload your resume (PDF)"}
               </span>
-              <span className="text-[11px] text-subtle mt-0.5">PDF format up to 10MB</span>
+              <span className="text-[11px] text-subtle mt-0.5">Automated formatting and gap extraction</span>
               <input type="file" accept=".pdf" onChange={handlePdfDrop} disabled={isUploading} className="hidden" />
             </label>
 
             <div className="flex items-center justify-between pt-1">
-              <span className="text-xs text-subtle font-medium">Selected: <strong className="text-obsidian">{currentStudent.name || "Candidate"}</strong></span>
+              <span className="text-xs text-subtle font-medium">Loaded: <strong className="text-obsidian">{currentStudent.name}</strong></span>
               <button
                 onClick={() => setIsATSModalOpen(true)}
                 className="px-4 py-1.5 rounded-full text-xs font-semibold bg-canvas text-obsidian hover:bg-[#EAEAEA] border border-[#E0E0DC] flex items-center space-x-1.5"
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>Clean Resume Preview</span>
+                <span>Formatted Preview</span>
               </button>
             </div>
           </div>
 
+          {currentStudent.weakBullets && currentStudent.weakBullets.length > 0 && (
+            <div className="bg-surface rounded-3xl p-5 border border-[#E6E6E3] shadow-xs space-y-3">
+              <div className="flex items-center space-x-2 text-xs font-bold text-amber-900">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>Resume Improvement Recommendation</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-amber-50/60 border border-amber-200/60 text-xs space-y-1">
+                <span className="text-[10px] uppercase font-bold text-amber-800 tracking-wider">Current Entry:</span>
+                <p className="text-amber-950 font-mono text-[11px]">
+                  "{currentStudent.weakBullets[0].original}"
+                </p>
+              </div>
+              <div className="p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200/70 text-xs space-y-1">
+                <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">✦ Recommended Rewrite:</span>
+                <p className="text-emerald-950 font-medium text-[11px]">
+                  "{currentStudent.weakBullets[0].improved || currentStudent.weakBullets[0].suggested}"
+                </p>
+              </div>
+            </div>
+          )}
+
           <ConcentricReadinessDial readiness={readinessPayload} />
           <ProgressTimelineWidget progressData={serverProgress} />
 
-          {/* Restored Issue 2: External Job URL Scraper */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-3">
-            <h4 className="font-bold text-obsidian text-sm">Check an External Job Posting</h4>
-            <p className="text-xs text-subtle">Paste any job post link (LinkedIn, Greenhouse) to extract required skills.</p>
+            <h4 className="font-bold text-obsidian text-sm">Analyze External Opportunity</h4>
+            <p className="text-xs text-subtle">Paste an off-campus job link to match your current profile.</p>
             <div className="flex space-x-2">
               <input
                 type="url"
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="https://company.com/jobs/ai-engineer"
+                placeholder="https://company.com/careers/role"
                 className="w-full text-xs px-3.5 py-2 rounded-xl bg-canvas border border-[#E0E0DC] text-obsidian focus:outline-none"
               />
               <button
@@ -248,7 +426,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                 disabled={isScrapingUrl || !urlInput.trim()}
                 className="px-4 py-2 rounded-xl bg-obsidian text-white text-xs font-bold shrink-0 hover:bg-zinc-800 disabled:opacity-50"
               >
-                {isScrapingUrl ? "Parsing..." : "Extract"}
+                {isScrapingUrl ? "Analyzing..." : "Analyze"}
               </button>
             </div>
           </div>
@@ -257,7 +435,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <TrendingUp className="w-5 h-5 text-terracotta-500" />
-                <h3 className="font-bold text-obsidian text-base">Job Market Trends</h3>
+                <h3 className="font-bold text-obsidian text-base">Hiring Market Trends</h3>
               </div>
               <span className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full border ${layoffRisk.badgeClass}`}>
                 {layoffRisk.status}
@@ -271,7 +449,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="p-3 rounded-2xl bg-canvas border border-[#E4E4DF] space-y-1.5">
                 <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">
-                  🔥 Growing Skills
+                  🔥 High Demand Skills
                 </span>
                 {MARKET_SKILL_RADAR.highDemand.slice(0, 3).map((s, idx) => (
                   <div key={idx} className="flex justify-between text-[11px] font-medium text-obsidian">
@@ -283,7 +461,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
 
               <div className="p-3 rounded-2xl bg-canvas border border-[#E4E4DF] space-y-1.5">
                 <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider block">
-                  ⚠️ Declining Skills
+                  ⚠️ Declining Focus
                 </span>
                 {MARKET_SKILL_RADAR.decliningDemand.slice(0, 3).map((s, idx) => (
                   <div key={idx} className="flex justify-between text-[11px] font-medium text-obsidian">
@@ -296,44 +474,81 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           </div>
         </div>
 
-        {/* Right Column (7 Cols) */}
+        {/* Right Wing (7 Cols) */}
         <div className="lg:col-span-7 space-y-6">
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <span className="text-xs text-subtle font-semibold">Choose Target Job</span>
-                <div className="flex items-center space-x-2 mt-1">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs text-subtle font-semibold">Active Placement Target:</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    selectedJob.is_live
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                  }`}>
+                    {selectedJob.source || "Campus Partner Drive"}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2 mt-1.5">
                   <select
                     value={selectedJobId}
                     onChange={(e) => setSelectedJobId(e.target.value)}
-                    className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none"
+                    className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer max-w-md"
                   >
-                    {TARGET_JOBS.map(job => (
-                      <option key={job.id} value={job.id}>{job.title} ({job.tier})</option>
+                    {jobsList.map(job => (
+                      <option key={job.id} value={job.id}>
+                        {job.title} — {job.company} ({job.composite_score ? `${job.composite_score}% Match` : job.tier})
+                      </option>
                     ))}
                   </select>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-3 bg-canvas px-4 py-2 rounded-2.5xl border border-[#E2E2DE]">
-                <div className="w-11 h-11 rounded-full border-4 border-terracotta-500 flex items-center justify-center font-black text-obsidian text-xs">
-                  {matchResult.matchPercentage}%
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-1">
+                  <button
+                    onClick={() => handleToggleSaveJob(selectedJob.id)}
+                    className={`p-2 rounded-xl border transition-all ${
+                      matchResult.isSaved
+                        ? 'bg-amber-50 text-amber-600 border-amber-300'
+                        : 'bg-canvas text-subtle hover:text-obsidian border-[#E0E0DC]'
+                    }`}
+                    title={matchResult.isSaved ? "Saved Role (Click to Unsave)" : "Bookmark Role"}
+                  >
+                    {matchResult.isSaved ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+                  </button>
+                  <button
+                    onClick={() => handleHideJob(selectedJob.id)}
+                    className={`p-2 rounded-xl border transition-all ${
+                      matchResult.isHidden
+                        ? 'bg-rose-50 text-rose-600 border-rose-300'
+                        : 'bg-canvas text-subtle hover:text-rose-600 border-[#E0E0DC]'
+                    }`}
+                    title="Not Interested / Hide"
+                  >
+                    <EyeOff className="w-4 h-4" />
+                  </button>
                 </div>
-                <div>
-                  <span className="text-[10px] font-bold text-subtle uppercase block">Job Match</span>
-                  <span className="text-xs font-semibold text-obsidian">
-                    {matchResult.matchedSkills.length} of {selectedJob.requiredSkills.length} skills matched
-                  </span>
+
+                <div className="flex items-center space-x-3 bg-canvas px-4 py-2 rounded-2.5xl border border-[#E2E2DE]">
+                  <div className="w-11 h-11 rounded-full border-4 border-terracotta-500 flex items-center justify-center font-black text-obsidian text-xs">
+                    {matchResult.matchPercentage}%
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-subtle uppercase block">Role Fit</span>
+                    <span className="text-xs font-semibold text-obsidian">
+                      {matchResult.matchedSkills.length} of {reqSkillsCount} skills
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Placement Rule Warning */}
             {matchResult.sopViolations.length > 0 && (
               <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
                 <div className="flex items-center space-x-1.5 font-bold">
                   <AlertTriangle className="w-4 h-4 text-rose-600" />
-                  <span>College Placement Rule Alert</span>
+                  <span>University Placement Policy Notice</span>
                 </div>
                 {matchResult.sopViolations.map((v, i) => (
                   <p key={i} className="text-[11px] text-rose-800">• {v}</p>
@@ -341,7 +556,27 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               </div>
             )}
 
-            {/* Matched & Missing Skills */}
+            <div className="p-4 rounded-2.5xl bg-canvas border border-[#E2E2DE] space-y-2.5">
+              <div className="flex items-center space-x-1.5 text-xs font-bold text-obsidian">
+                <Sparkles className="w-3.5 h-3.5 text-terracotta-500" />
+                <span>Why This Role Fits Your Profile:</span>
+              </div>
+              <ul className="space-y-1 text-[11px] text-zinc-700">
+                {matchResult.fitReasons.map((reason, idx) => (
+                  <li key={idx} className="flex items-start space-x-1.5">
+                    <span className="text-emerald-600 font-bold">✓</span>
+                    <span>{reason}</span>
+                  </li>
+                ))}
+                {matchResult.cautionNotes.map((note, idx) => (
+                  <li key={idx} className="flex items-start space-x-1.5 text-amber-800">
+                    <span className="text-amber-500 font-bold">△</span>
+                    <span>{note}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             <div className="flex flex-wrap gap-2 pt-1">
               {matchResult.matchedSkills.map((sk, idx) => (
                 <span key={idx} className="text-xs bg-emerald-50 text-emerald-800 font-semibold px-3 py-1 rounded-full border border-emerald-200">
@@ -350,15 +585,14 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               ))}
               {matchResult.missingSkills.map((sk, idx) => (
                 <span key={idx} className="text-xs bg-terracotta-50 text-terracotta-600 font-semibold px-3 py-1 rounded-full border border-terracotta-100">
-                  △ Need to Learn: {sk}
+                  △ Recommended: {sk}
                 </span>
               ))}
             </div>
 
-            {/* Fixed Issue 5: Interactive Placement Application Button Enforcing SOP Constraints */}
             <div className="pt-2 border-t border-[#ECECE9] flex items-center justify-between">
               <span className="text-xs text-subtle">
-                Active Campus Drives: <strong>{currentStudent.activeAppsCount}/3</strong> allowed
+                Active Drives: <strong>{currentStudent.activeAppsCount} / 3</strong> enrolled
               </span>
               <button
                 onClick={handleApplyToJob}
@@ -374,12 +608,12 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                 {hasApplied ? (
                   <>
                     <Check className="w-3.5 h-3.5" />
-                    <span>Applied for Drive</span>
+                    <span>Application Submitted</span>
                   </>
                 ) : (
                   <>
                     <Send className="w-3.5 h-3.5" />
-                    <span>{isCapBlocked ? "Application Limit (3) Reached" : isCgpaBlocked ? "Ineligible (CGPA < 6.0)" : "Submit Campus Application"}</span>
+                    <span>{isCapBlocked ? "Application Limit (3) Reached" : isCgpaBlocked ? "Restricted by CGPA" : "Enroll for Campus Drive"}</span>
                   </>
                 )}
               </button>
@@ -392,66 +626,79 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             targetRole={selectedJob.title}
           />
 
+          {/* Dynamic 4-Week Roadmap */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h3 className="font-bold text-obsidian text-base">4-Week Preparation Plan</h3>
-                <p className="text-xs text-subtle">Check off tasks as you finish them to boost your score.</p>
+                <div className="flex items-center space-x-2">
+                  <BookOpen className="w-4 h-4 text-terracotta-500" />
+                  <h3 className="font-bold text-obsidian text-base">4-Week Career Preparation Plan</h3>
+                </div>
+                <p className="text-xs text-subtle">
+                  Adapted for <strong className="text-obsidian">{selectedJob.title}</strong> • Style: <strong className="text-obsidian">{preferences?.learning_style?.replace('_', ' ') || 'PROJECT BASED'}</strong>
+                </p>
               </div>
               <span className="text-xs font-bold text-obsidian bg-canvas px-3 py-1 rounded-full border border-[#E0E0DC]">
                 {planCompletionPct}% Completed
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {matchResult.missingSkills.slice(0, 4).map((skill, idx) => {
-                const weekNum = idx + 1;
-                const isDone = completedMilestones.includes(weekNum);
-                const res = VERIFIED_RESOURCES[skill] || {
-                  title: `${skill} Tutorials`,
-                  provider: "Official Guide",
-                  url: "https://docs.docker.com",
-                  duration: "8 Hours"
-                };
-
-                return (
+            {isLoadingRoadmap ? (
+              <div className="p-8 text-center text-xs text-subtle">Personalizing roadmap modules...</div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {dynamicRoadmap.map((item, idx) => (
                   <div
                     key={idx}
-                    onClick={() => toggleMilestone(weekNum)}
+                    onClick={() => toggleMilestone(item.week)}
                     className={`p-4 rounded-2.5xl border transition-all cursor-pointer select-none flex flex-col justify-between space-y-3 ${
-                      isDone ? 'bg-emerald-50/50 border-emerald-300' : 'bg-canvas border-[#E2E2DE] hover:border-terracotta-300'
+                      item.is_completed || completedMilestones.includes(item.week)
+                        ? 'bg-emerald-50/50 border-emerald-300'
+                        : 'bg-canvas border-[#E2E2DE] hover:border-terracotta-300'
                     }`}
                   >
                     <div>
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold text-terracotta-600 uppercase tracking-wider">
-                          Week {weekNum} Task
+                          Week {item.week} • {item.skill}
                         </span>
-                        <CheckCircle2 className={`w-4 h-4 ${isDone ? 'text-emerald-600' : 'text-zinc-300'}`} />
+                        <CheckCircle2 className={`w-4 h-4 ${item.is_completed || completedMilestones.includes(item.week) ? 'text-emerald-600' : 'text-zinc-300'}`} />
                       </div>
-                      <h4 className="font-bold text-obsidian text-xs mt-1 leading-snug">{res.title}</h4>
-                      <p className="text-[11px] text-subtle mt-0.5">{res.provider} • {res.duration}</p>
+                      <h4 className="font-bold text-obsidian text-xs mt-1 leading-snug">{item.title}</h4>
+                      <p className="text-[11px] text-subtle mt-0.5">{item.provider}</p>
                     </div>
 
-                    <a
-                      href={res.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="inline-flex items-center space-x-1 text-xs font-bold text-obsidian hover:text-terracotta-500"
-                    >
-                      <span>Start Learning</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
+                    <div className="space-y-2 pt-1 border-t border-[#E8E8E4]">
+                      <div className="flex items-center justify-between text-[10px] text-zinc-600">
+                        <span className="bg-surface px-2 py-0.5 rounded-full border border-[#E0E0DC] font-medium">
+                          {item.format_badge}
+                        </span>
+                        <span className="flex items-center space-x-1 font-mono text-terracotta-700">
+                          <Clock className="w-3 h-3" />
+                          <span>{item.allocated_hours}h / {item.weekly_budget}h budget</span>
+                        </span>
+                      </div>
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center space-x-1 text-xs font-bold text-obsidian hover:text-terracotta-500"
+                      >
+                        <span>Access Material</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <MockInterview
             studentId={currentStudent.id}
-            missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : ["RAG Pipelines", "System Design"]}
+            targetRoleTitle={selectedJob.title}
+            missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : (selectedJob.requiredSkills || ["System Design", "Docker"])}
             addTrace={addTrace}
             onScoreUpdate={(score) => setInterviewScore(score)}
           />
@@ -462,6 +709,24 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         <ATSPreviewModal
           student={currentStudent}
           onClose={() => setIsATSModalOpen(false)}
+        />
+      )}
+
+      {isPreferenceModalOpen && (
+        <PreferenceModal
+          preferences={preferences}
+          onSave={handleSavePreferences}
+          onClose={() => setIsPreferenceModalOpen(false)}
+        />
+      )}
+
+      {/* Phase 5: Official Placement Readiness Dossier Modal */}
+      {isReportModalOpen && (
+        <ReadinessReportModal
+          student={currentStudent}
+          targetJob={selectedJob}
+          readiness={readinessPayload}
+          onClose={() => setIsReportModalOpen(false)}
         />
       )}
     </div>

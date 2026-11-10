@@ -1,0 +1,20 @@
+{
+  "institution_name": "JK Lakshmipat University",
+  "placement_session": "2025-2026",
+  "rules": {
+    "tier_1_min_cgpa": 6.0,
+    "tier_2_min_cgpa": 5.0,
+    "max_concurrent_applications": 3,
+    "review_sla_hours": 48
+  },
+  "tier_criteria": {
+    "Tier-1": {
+      "min_cgpa": 6.0,
+      "description": "Enterprise Labs, Senior System Roles & High-CTC Drives"
+    },
+    "Tier-2": {
+      "min_cgpa": 5.0,
+      "description": "Standard Engineering & Core Developer Recruitment"
+    }
+  }
+}

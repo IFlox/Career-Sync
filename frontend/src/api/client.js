@@ -1,7 +1,6 @@
 const API_BASE = '/api/v1';
 
 export const apiClient = {
-  // Session Token Storage
   setAdminToken(token) {
     if (token) {
       sessionStorage.setItem('careersync_admin_token', token);
@@ -14,7 +13,6 @@ export const apiClient = {
     return sessionStorage.getItem('careersync_admin_token');
   },
 
-  // Helper for admin headers
   getAdminHeaders() {
     const token = this.getAdminToken();
     const headers = { 'Content-Type': 'application/json' };
@@ -25,7 +23,83 @@ export const apiClient = {
     return headers;
   },
 
-  // Student API
+  // Phase 5: Closed-Loop Next Best Action API
+  async getNextAction(studentId, jobId = "job-ai-sys") {
+    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/recommendations/next-action?job_id=${encodeURIComponent(jobId)}`);
+    if (!res.ok) throw new Error('Failed to load next action recommendation.');
+    return res.json();
+  },
+
+  // Student Preferences & Feedback
+  async getPreferences(studentId) {
+    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/preferences`);
+    if (!res.ok) throw new Error('Failed to load career preferences.');
+    return res.json();
+  },
+
+  async updatePreferences(studentId, prefData) {
+    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prefData),
+    });
+    if (!res.ok) throw new Error('Failed to save career preferences.');
+    return res.json();
+  },
+
+  async submitFeedback(studentId, entityType, entityId, action, reason = "") {
+    const res = await fetch(`${API_BASE}/students/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        student_id: studentId,
+        entity_type: entityType,
+        entity_id: entityId,
+        action: action,
+        reason: reason
+      })
+    });
+    if (!res.ok) throw new Error('Failed to record feedback.');
+    return res.json();
+  },
+
+  async getFeedback(studentId) {
+    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/feedback`);
+    if (!res.ok) throw new Error('Failed to load student feedback.');
+    return res.json();
+  },
+
+  async getRankedJobs(studentId) {
+    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/ranked-jobs`);
+    if (!res.ok) throw new Error('Failed to load personalized job rankings.');
+    return res.json();
+  },
+
+  async getLiveJobs() {
+    const res = await fetch(`${API_BASE}/students/jobs/live`);
+    if (!res.ok) throw new Error('Failed to load job listings.');
+    return res.json();
+  },
+
+  async getUniversityPolicy() {
+    const res = await fetch(`${API_BASE}/students/policy`);
+    if (!res.ok) throw new Error('Failed to fetch university policy.');
+    return res.json();
+  },
+
+  async submitCampusApplication(applicationData) {
+    const res = await fetch(`${API_BASE}/students/applications/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(applicationData)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Application failed to submit.');
+    }
+    return res.json();
+  },
+
   async processResume(rawText, targetJobId = 'job-ai-sys') {
     const res = await fetch(`${API_BASE}/students/resume/process`, {
       method: 'POST',
@@ -64,6 +138,12 @@ export const apiClient = {
     return res.json();
   },
 
+  async getRoadmap(studentId, jobId = "job-ai-sys") {
+    const res = await fetch(`${API_BASE}/students/roadmap/${encodeURIComponent(studentId)}?job_id=${encodeURIComponent(jobId)}`);
+    if (!res.ok) throw new Error('Failed to generate personalized upskilling roadmap.');
+    return res.json();
+  },
+
   async getInterviewQuestion(skill = 'RAG Pipelines', difficulty = 6) {
     const res = await fetch(`${API_BASE}/students/interview/question?skill=${encodeURIComponent(skill)}&difficulty=${difficulty}`);
     if (!res.ok) throw new Error('Failed to fetch interview question.');
@@ -99,7 +179,7 @@ export const apiClient = {
     return res.json();
   },
 
-  // Admin API (Token Authenticated)
+  // Admin API
   async verifyAdminPin(pin) {
     const res = await fetch(`${API_BASE}/admin/auth/verify`, {
       method: 'POST',
@@ -122,6 +202,24 @@ export const apiClient = {
       headers: this.getAdminHeaders(),
     });
     if (!res.ok) throw new Error('Unauthorized access to admin matrix.');
+    return res.json();
+  },
+
+  async getIntentAnalytics() {
+    const res = await fetch(`${API_BASE}/admin/analytics/intent`, {
+      headers: this.getAdminHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to load student intent analytics.');
+    return res.json();
+  },
+
+  async generateRemediationSyllabus(skills = ["Docker & Containerization", "System Design", "RAG Pipelines"]) {
+    const res = await fetch(`${API_BASE}/admin/remediation/syllabus`, {
+      method: 'POST',
+      headers: this.getAdminHeaders(),
+      body: JSON.stringify({ target_skills: skills })
+    });
+    if (!res.ok) throw new Error('Failed to generate remediation syllabus.');
     return res.json();
   },
 

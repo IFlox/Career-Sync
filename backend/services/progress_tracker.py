@@ -1,20 +1,19 @@
 """
-CareerSync Progress & Readiness Snapshot Engine
-Event-sourced persistence for milestone completions, interview history,
-and time-series readiness trajectories.
+CareerSync Progress & Readiness Snapshot Engine (Phase 5)
+Supports append-only event logging, role-specific readiness tracking,
+and dynamic next-best-action generation.
 """
 
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
+
 class ProgressTrackerService:
-    # Append-only event log
     _events: List[Dict[str, Any]] = [
-        # Seeded historical events for Priya Sharma (stud-01)
         {
             "student_id": "stud-01",
             "event_type": "RESUME_AUDITED",
-            "title": "ATS Resume Audit Completed",
+            "title": "Resume Impact Audit Completed (Score: 88%)",
             "score": 88,
             "timestamp": (datetime.utcnow() - timedelta(days=6)).strftime("%Y-%m-%d %H:%M")
         },
@@ -28,20 +27,18 @@ class ProgressTrackerService:
         {
             "student_id": "stud-01",
             "event_type": "INTERVIEW_ATTEMPT",
-            "title": "Mock Technical Interview: RAG Pipelines",
+            "title": "Mock Technical Interview: RAG Pipelines (Score: 8/10)",
             "score": 8,
             "timestamp": (datetime.utcnow() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M")
         },
     ]
 
-    # Student milestone states: { student_id: [completed_week_numbers] }
     _milestone_state: Dict[str, List[int]] = {
         "stud-01": [1],
         "stud-02": [],
         "stud-03": []
     }
 
-    # Historical readiness trajectory data points (7-day trend)
     _readiness_history: Dict[str, List[Dict[str, Any]]] = {
         "stud-01": [
             {"day": "Day 1", "date": (datetime.utcnow() - timedelta(days=6)).strftime("%b %d"), "readiness": 52},
@@ -65,11 +62,10 @@ class ProgressTrackerService:
 
     @classmethod
     def get_progress(cls, student_id: str) -> Dict[str, Any]:
-        """Returns authoritative server-side student progress."""
         student_events = [e for e in cls._events if e["student_id"] == student_id]
         history = cls._readiness_history.get(student_id, [
-            {"day": "Day 1", "date": "Nov 01", "readiness": 40},
-            {"day": "Today", "date": "Nov 06", "readiness": 60}
+            {"day": "Day 1", "date": "Day 1", "readiness": 40},
+            {"day": "Today", "date": "Today", "readiness": 60}
         ])
         milestones = cls._milestone_state.get(student_id, [])
 
@@ -78,14 +74,13 @@ class ProgressTrackerService:
             "completed_milestones": milestones,
             "milestone_completion_pct": round((len(milestones) / 4) * 100),
             "trajectory": history,
-            "recent_events": student_events[-5:], # Top 5 latest events
+            "recent_events": student_events[-5:],
             "total_events_count": len(student_events),
             "activity_streak_days": len(history)
         }
 
     @classmethod
     def toggle_milestone(cls, student_id: str, week_number: int, current_readiness: int) -> Dict[str, Any]:
-        """Toggles a milestone, commits an event, and appends a new snapshot."""
         if student_id not in cls._milestone_state:
             cls._milestone_state[student_id] = []
 
@@ -99,7 +94,6 @@ class ProgressTrackerService:
             action = "COMPLETED"
             new_score = min(99, current_readiness + 5)
 
-        # 1. Commit Event to Log
         event = {
             "student_id": student_id,
             "event_type": f"MILESTONE_{action}",
@@ -109,7 +103,6 @@ class ProgressTrackerService:
         }
         cls._events.append(event)
 
-        # 2. Append Snapshot to Time Series
         if student_id not in cls._readiness_history:
             cls._readiness_history[student_id] = []
 
@@ -130,17 +123,15 @@ class ProgressTrackerService:
 
     @classmethod
     def log_interview_attempt(cls, student_id: str, skill: str, score: int, current_readiness: int) -> None:
-        """Commits interview completion event and updates trajectory."""
         event = {
             "student_id": student_id,
             "event_type": "INTERVIEW_EVALUATION",
-            "title": f"Mock Technical Interview on {skill} (Score: {score}/10)",
+            "title": f"Technical Mock Interview: {skill} (Score: {score}/10)",
             "score": score * 10,
             "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         }
         cls._events.append(event)
 
-        # Boost readiness if performance was good
         delta = 3 if score >= 7 else 1
         new_readiness = min(99, current_readiness + delta)
 
@@ -152,3 +143,29 @@ class ProgressTrackerService:
             "date": datetime.utcnow().strftime("%b %d"),
             "readiness": new_readiness
         })
+
+    # Phase 5: Closed-Loop Next Best Action Synthesis
+    @classmethod
+    def get_next_best_action(cls, student_id: str, target_role_title: str, missing_skills: List[str], current_readiness: int) -> Dict[str, Any]:
+        milestones = cls._milestone_state.get(student_id, [])
+        uncompleted_weeks = [w for w in [1, 2, 3, 4] if w not in milestones]
+
+        if uncompleted_weeks:
+            next_week = uncompleted_weeks[0]
+            next_skill = missing_skills[0] if missing_skills else "System Design"
+            target_boost = min(99, current_readiness + 5)
+            return {
+                "headline": f"Complete Week {next_week} milestone for {next_skill}",
+                "description": f"Finishing this practical module will elevate your {target_role_title} readiness from {current_readiness}% to approximately {target_boost}%.",
+                "action_type": "STUDY_MILESTONE",
+                "target_skill": next_skill,
+                "projected_readiness": target_boost
+            }
+
+        return {
+            "headline": f"Schedule final mock viva for {target_role_title}",
+            "description": "All 4 weekly preparation milestones are complete. Take a comprehensive 10-minute technical interview to lock in your readiness score.",
+            "action_type": "PRACTICE_INTERVIEW",
+            "target_skill": missing_skills[0] if missing_skills else "System Architecture",
+            "projected_readiness": min(99, current_readiness + 3)
+        }

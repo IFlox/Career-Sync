@@ -9,7 +9,6 @@ import { apiClient } from './api/client';
 export default function App() {
   const [activePortal, setActivePortal] = useState('student');
   
-  // Safe check that never crashes if client.js is reloading
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => {
     try {
       if (typeof apiClient?.getAdminToken === 'function') {
@@ -26,9 +25,9 @@ export default function App() {
   const [authError, setAuthError] = useState("");
 
   const [executionSteps, setExecutionSteps] = useState([
-    { step: "System Initialized", tool: "FastAPI Engine", duration_ms: 12.4, status: "success", output_summary: "Ready for student sessions" },
-    { step: "Privacy Protection Active", tool: "Regex Engine", duration_ms: 2.1, status: "success", output_summary: "Personal details hidden" },
-    { step: "College Rules Loaded", tool: "Policy Engine", duration_ms: 1.8, status: "success", output_summary: "Eligibility rules ready" }
+    { step: "System Initialized", duration_ms: 12.4, status: "success", output_summary: "Ready for student sessions" },
+    { step: "Data Privacy Protocol", duration_ms: 2.1, status: "success", output_summary: "Contact information masked" },
+    { step: "Institutional Rules Loaded", duration_ms: 1.8, status: "success", output_summary: "Campus drive guidelines active" }
   ]);
   const [totalLatency, setTotalLatency] = useState(16.3);
 
@@ -42,10 +41,9 @@ export default function App() {
     setExecutionSteps(prev => [
       {
         step: message,
-        tool: type === 'error' ? 'ErrorMonitor' : 'AgentWorkflow',
         duration_ms: Math.floor(Math.random() * 35) + 12,
         status: type === 'error' ? 'error' : 'success',
-        output_summary: `Time: ${timeStr}`
+        output_summary: `Recorded at ${timeStr}`
       },
       ...prev
     ]);
@@ -62,9 +60,9 @@ export default function App() {
       setActivePortal('admin');
       setAuthError("");
       setAdminPin("");
-      addTrace("Admin authenticated via secure session.");
+      addTrace("Placement officer authenticated.");
     } catch (err) {
-      setAuthError(err.message || "Incorrect password. Access denied.");
+      setAuthError(err.message || "Invalid credentials. Please contact administration.");
     }
   };
 
@@ -76,7 +74,7 @@ export default function App() {
     }
     setIsAdminLoggedIn(false);
     setActivePortal('student');
-    addTrace("Admin session cleared. Logged out.");
+    addTrace("Officer session ended.");
   };
 
   return (
@@ -106,7 +104,7 @@ export default function App() {
         totalLatency={totalLatency}
       />
 
-      {/* Admin Login Modal */}
+      {/* Discreet Officer Login Modal */}
       {isAdminAuthModalOpen && (
         <div className="fixed inset-0 z-50 bg-obsidian/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-surface rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-[#E0E0DC] space-y-4">
@@ -126,8 +124,8 @@ export default function App() {
             </div>
 
             <div>
-              <h3 className="font-bold text-obsidian text-base">Admin Login</h3>
-              <p className="text-xs text-subtle mt-0.5">Enter password to access admin dashboard.</p>
+              <h3 className="font-bold text-obsidian text-base">Placement Officer Sign In</h3>
+              <p className="text-xs text-subtle mt-0.5">Enter institutional access key.</p>
             </div>
 
             <form onSubmit={handleAdminLogin} className="space-y-3">
@@ -135,7 +133,7 @@ export default function App() {
                 type="password"
                 value={adminPin}
                 onChange={(e) => setAdminPin(e.target.value)}
-                placeholder="Demo Password: tpo_secure_2026"
+                placeholder="Enter access code"
                 className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-canvas border border-[#E0E0DC] text-obsidian focus:outline-none focus:ring-1 focus:ring-obsidian"
                 autoFocus
               />
@@ -148,7 +146,7 @@ export default function App() {
                 type="submit"
                 className="w-full py-2.5 rounded-xl bg-obsidian text-white font-bold text-xs hover:bg-zinc-800 transition-colors"
               >
-                Sign In to Admin
+                Authenticate
               </button>
             </form>
           </div>

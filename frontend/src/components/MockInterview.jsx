@@ -1,21 +1,63 @@
 import React, { useState, useEffect } from 'react';
-import { Mic, MicOff, Send, Volume2, ChevronRight, RefreshCw } from 'lucide-react';
-import { MOCK_INTERVIEW_QUESTIONS } from '../data/seedData';
+import { Mic, MicOff, Send, Volume2, ChevronRight, RefreshCw, Briefcase } from 'lucide-react';
 import { apiClient } from '../api/client';
 
-export default function MockInterview({ studentId = "stud-01", missingSkills = ["RAG Pipelines", "System Design"], addTrace, onScoreUpdate }) {
-  const [currentSkill, setCurrentSkill] = useState("RAG Pipelines");
-  const [questionIdx, setQuestionIdx] = useState(0);
+export default function MockInterview({
+  studentId = "stud-01",
+  targetRoleTitle = "AI Systems & RAG Engineer",
+  missingSkills = ["RAG Pipelines", "System Design"],
+  addTrace,
+  onScoreUpdate
+}) {
+  const [currentSkill, setCurrentSkill] = useState(missingSkills[0] || "RAG Pipelines");
   const [difficulty, setDifficulty] = useState(6);
+  const [currentQuestion, setCurrentQuestion] = useState({
+    question: "Loading adaptive question...",
+    level: "Intermediate",
+    keywords: []
+  });
+  const [questionCount, setQuestionCount] = useState(1);
   const [answer, setAnswer] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
+  const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [sessionScores, setSessionScores] = useState([]);
-  const [audioWaves, setAudioWaves] = useState([20, 45, 60, 30, 80, 50, 25, 65, 40, 70, 35, 55]);
+  const [audioWaves, setAudioWaves] = useState([20, 25, 20, 30, 20, 25, 20, 30, 20, 25]);
 
-  const questions = MOCK_INTERVIEW_QUESTIONS[currentSkill] || MOCK_INTERVIEW_QUESTIONS["RAG Pipelines"];
-  const currentQuestion = questions[questionIdx % questions.length];
+  // Sync skill dropdown whenever target role or missingSkills change
+  useEffect(() => {
+    if (missingSkills && missingSkills.length > 0) {
+      if (!missingSkills.includes(currentSkill)) {
+        setCurrentSkill(missingSkills[0]);
+        setFeedback(null);
+      }
+    }
+  }, [missingSkills]);
+
+  // Fetch question from backend whenever skill or difficulty adapts
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingQuestion(true);
+    apiClient.getInterviewQuestion(currentSkill, difficulty)
+      .then(q => {
+        if (isMounted && q) setCurrentQuestion(q);
+      })
+      .catch(() => {
+        if (isMounted) {
+          setCurrentQuestion({
+            question: `Explain the fundamental architecture and production challenges of ${currentSkill}.`,
+            level: difficulty >= 8 ? "Advanced" : difficulty <= 4 ? "Foundational" : "Intermediate",
+            keywords: ["scalability", "architecture", "trade-offs"]
+          });
+        }
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingQuestion(false);
+      });
+
+    return () => { isMounted = false; };
+  }, [currentSkill, difficulty]);
 
   useEffect(() => {
     let interval;
@@ -24,7 +66,7 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
         setAudioWaves(prev => prev.map(() => Math.floor(Math.random() * 65) + 15));
       }, 100);
     } else {
-      setAudioWaves([20, 25, 20, 30, 20, 25, 20, 30, 20, 25, 20, 25]);
+      setAudioWaves([20, 25, 20, 30, 20, 25, 20, 30, 20, 25]);
     }
     return () => clearInterval(interval);
   }, [isRecording]);
@@ -32,7 +74,7 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
   const toggleSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Browser speech recognition is not supported on this browser. Please type your response.");
+      alert("Browser speech recognition is not supported in this browser. Please type your response.");
       return;
     }
 
@@ -62,7 +104,7 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
   };
 
   const handleSpeakQuestion = () => {
-    if ('speechSynthesis' in window) {
+    if ('speechSynthesis' in window && currentQuestion?.question) {
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(currentQuestion.question);
       utter.rate = 1.0;
@@ -73,9 +115,9 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
   const handleSubmit = async () => {
     if (!answer.trim()) return;
     setIsEvaluating(true);
+    addTrace?.(`Interview answer for ${currentSkill} (${targetRoleTitle}, Diff: ${difficulty}/10)...`);
 
     try {
-      // Dynamic studentId passed to backend
       const res = await apiClient.submitInterviewAnswer(
         studentId,
         currentSkill,
@@ -83,22 +125,20 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
         difficulty,
         currentQuestion.question
       );
+
       setFeedback(res);
-      setDifficulty(res.next_difficulty || difficulty);
+      const nextDiff = Math.max(1, Math.min(10, res.next_difficulty || difficulty));
+      setDifficulty(nextDiff);
+
       const newScores = [...sessionScores, res.score];
       setSessionScores(newScores);
-      const avg = Math.round(newScores.reduce((a, b) => a + b, 0) / newScores.length) * 10;
+      const avg = Math.round((newScores.reduce((a, b) => a + b, 0) / newScores.length) * 10);
       onScoreUpdate?.(avg);
-      addTrace?.(`[INTERVIEW RESULT]: Score ${res.score}/10 -> ${res.adaptation_note}`);
-    } catch {
-      setFeedback({
-        score: 8,
-        adaptation_note: "Difficulty increased to Level 7 for strong response.",
-        matched_keywords: ["architecture", "scaling", "latency"],
-        missing_keywords: ["edge cases"],
-        critique: "Well-reasoned response covering core technical trade-offs."
-      });
-      setDifficulty(prev => Math.min(10, prev + 1));
+
+      addTrace?.(`Interview score: ${res.score}/10 [${res.evaluated_by}]. Next difficulty: ${nextDiff}/10.`);
+    } catch (err) {
+      alert(`Evaluation failed: ${err.message}`);
+      addTrace?.(`Evaluation error: ${err.message}`, "error");
     } finally {
       setIsEvaluating(false);
     }
@@ -107,18 +147,22 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
   const handleNext = () => {
     setFeedback(null);
     setAnswer("");
-    setQuestionIdx(prev => prev + 1);
+    setQuestionCount(prev => prev + 1);
   };
 
   return (
     <div className="bg-surface rounded-3xl p-6 sm:p-7 border border-[#E6E6E3] shadow-xs space-y-6">
+      {/* Session Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[#ECECE9]">
         <div>
           <div className="flex items-center space-x-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
             <h3 className="font-extrabold text-obsidian text-base sm:text-lg">AI Practice Interview</h3>
           </div>
-          <p className="text-xs text-subtle mt-0.5">Live technical practice that adapts to your performance.</p>
+          <p className="text-xs text-subtle mt-0.5 flex items-center space-x-1">
+            <Briefcase className="w-3.5 h-3.5 text-terracotta-500" />
+            <span>Targeting: <strong className="text-obsidian">{targetRoleTitle}</strong></span>
+          </p>
         </div>
 
         <div className="flex items-center space-x-3">
@@ -128,10 +172,9 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
               value={currentSkill}
               onChange={(e) => {
                 setCurrentSkill(e.target.value);
-                setQuestionIdx(0);
                 setFeedback(null);
               }}
-              className="bg-transparent text-xs font-bold text-obsidian focus:outline-none"
+              className="bg-transparent text-xs font-bold text-obsidian focus:outline-none cursor-pointer"
             >
               {missingSkills.map((sk, i) => (
                 <option key={i} value={sk}>{sk}</option>
@@ -144,10 +187,11 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
         </div>
       </div>
 
+      {/* Dynamic Question Card */}
       <div className="bg-canvas p-5 rounded-2.5xl border border-[#E2E2DE] space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-extrabold uppercase tracking-wider text-terracotta-600 bg-terracotta-50 px-2.5 py-0.5 rounded-full border border-terracotta-100">
-            Question #{questionIdx + 1} • {currentQuestion.level}
+            Question #{questionCount} • {currentQuestion.level || "Adaptive"}
           </span>
           <button
             onClick={handleSpeakQuestion}
@@ -158,10 +202,11 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
           </button>
         </div>
         <p className="text-sm sm:text-base font-bold text-obsidian leading-relaxed">
-          "{currentQuestion.question}"
+          {isLoadingQuestion ? "Loading adaptive question..." : `"${currentQuestion.question}"`}
         </p>
       </div>
 
+      {/* Speech Input & Waveform */}
       <div className="space-y-4">
         <div className="h-12 bg-canvas rounded-2xl border border-[#E0E0DC] flex items-center justify-center space-x-1.5 px-4">
           {audioWaves.map((h, i) => (
@@ -174,7 +219,7 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
             ></span>
           ))}
           <span className="text-[11px] font-semibold text-subtle pl-3 font-mono">
-            {isRecording ? "Listening to mic stream..." : "Microphone ready. Click below to speak or type your answer."}
+            {isRecording ? "Listening to mic stream..." : "Microphone ready. Speak or type your answer below."}
           </span>
         </div>
 
@@ -182,7 +227,7 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
           rows={4}
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
-          placeholder="Type or speak your answer here (include trade-offs, components, and scale considerations)..."
+          placeholder="Explain your technical design, architectural components, and performance trade-offs..."
           className="w-full text-xs p-4 rounded-2xl bg-canvas border border-[#E0E0DC] text-obsidian placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-obsidian resize-none"
         />
 
@@ -207,11 +252,12 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
             className="px-6 py-2.5 rounded-full text-xs font-extrabold bg-obsidian text-white flex items-center space-x-2 hover:bg-zinc-800 disabled:opacity-50 transition-all shadow-xs"
           >
             {isEvaluating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            <span>Evaluate Answer</span>
+            <span>Submit for Evaluation</span>
           </button>
         </div>
       </div>
 
+      {/* Evaluation Feedback */}
       {feedback && (
         <div className="p-5 rounded-2.5xl bg-surface border border-terracotta-200 shadow-md space-y-4">
           <div className="flex items-center justify-between">
@@ -220,8 +266,10 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
                 {feedback.score}
               </div>
               <div>
-                <span className="font-extrabold text-obsidian text-sm block">Answer Score: {feedback.score} / 10</span>
-                <span className="text-[11px] text-subtle">Assessed on technical accuracy</span>
+                <span className="font-extrabold text-obsidian text-sm block">Score: {feedback.score} / 10</span>
+                <span className="text-[10px] text-subtle font-mono">
+                  Grounded: {feedback.evaluated_by === "ai" ? "Gemini/Groq LLM" : "Deterministic Lexical Rubric"}
+                </span>
               </div>
             </div>
             <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
@@ -235,12 +283,20 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
             <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/60">
-              <span className="font-bold text-emerald-950 block mb-1">✓ Covered Concepts:</span>
-              <p className="text-emerald-800">{(feedback.matched_keywords || []).join(", ") || "None clearly detected"}</p>
+              <span className="font-bold text-emerald-950 block mb-1">✓ Concepts Articulated:</span>
+              <p className="text-emerald-800">
+                {feedback.matched_keywords && feedback.matched_keywords.length > 0
+                  ? feedback.matched_keywords.join(", ")
+                  : "None detected in submission"}
+              </p>
             </div>
             <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/60">
-              <span className="font-bold text-amber-950 block mb-1">△ Missing Concepts:</span>
-              <p className="text-amber-800">{(feedback.missing_keywords || []).join(", ") || "Full technical coverage!"}</p>
+              <span className="font-bold text-amber-950 block mb-1">△ Concepts Missed:</span>
+              <p className="text-amber-800">
+                {feedback.missing_keywords && feedback.missing_keywords.length > 0
+                  ? feedback.missing_keywords.join(", ")
+                  : "All target concepts addressed"}
+              </p>
             </div>
           </div>
 
@@ -249,7 +305,7 @@ export default function MockInterview({ studentId = "stud-01", missingSkills = [
               onClick={handleNext}
               className="px-5 py-2 rounded-full text-xs font-bold bg-terracotta-500 text-white hover:bg-terracotta-600 flex items-center space-x-1.5 transition-colors shadow-xs"
             >
-              <span>Next Question</span>
+              <span>Next Adaptive Question</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>

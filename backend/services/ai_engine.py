@@ -2,8 +2,9 @@
 CareerSync Multi-Provider AI Engine
 Features:
 1. Multi-Model Cascade (llama-3.1-8b-instant -> llama3-8b-8192 -> gemma2-9b-it)
-2. Safe Markdown-to-JSON cleaning (no crashes from LLM backticks)
-3. Automatic Failover to Gemini / Offline Engine (Zero Downtime)
+2. Safe Markdown-to-JSON cleaning
+3. Dynamic, Answer-Grounded Fallback Evaluation
+4. Deterministic Term-Vector Embeddings for Repeatable Offline Testing
 """
 
 import os
@@ -48,7 +49,6 @@ if not groq_client and GEMINI_API_KEY:
 class CareerSyncAIEngine:
     @staticmethod
     def _clean_json_text(raw_text: str) -> str:
-        """Strips markdown code blocks, backticks, and trailing whitespace from LLM output."""
         cleaned = raw_text.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
@@ -56,8 +56,8 @@ class CareerSyncAIEngine:
         return cleaned
 
     @classmethod
-    def _call_llm_json(cls, prompt: str, fallback_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Tries verified free models in sequence with safe JSON decoding."""
+    def _call_llm_json(cls, prompt: str) -> Dict[str, Any] | None:
+        """Calls Groq or Gemini in sequence. Returns parsed dictionary or None on failure."""
         if groq_client:
             for model_name in CANDIDATE_GROQ_MODELS:
                 try:
@@ -66,8 +66,9 @@ class CareerSyncAIEngine:
                             {
                                 "role": "system",
                                 "content": (
-                                    "You are an expert AI Career and Placement Agent. "
-                                    "You MUST return ONLY valid, raw JSON with no markdown formatting or backticks."
+                                    "You are an expert technical evaluator. "
+                                    "You MUST return ONLY valid, raw JSON matching the requested schema. "
+                                    "Do NOT wrap output in markdown code blocks or backticks."
                                 )
                             },
                             {
@@ -76,7 +77,7 @@ class CareerSyncAIEngine:
                             }
                         ],
                         model=model_name,
-                        temperature=0.2,
+                        temperature=0.1,
                         response_format={"type": "json_object"}
                     )
                     raw_text = chat_completion.choices[0].message.content
@@ -93,7 +94,7 @@ class CareerSyncAIEngine:
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        temperature=0.2
+                        temperature=0.1
                     )
                 )
                 cleaned_json = cls._clean_json_text(response.text)
@@ -101,13 +102,35 @@ class CareerSyncAIEngine:
             except Exception:
                 pass
 
-        return fallback_data
+        return None
 
     @classmethod
     def get_embedding(cls, text: str) -> np.ndarray:
-        np.random.seed(abs(hash(text)) % (10 ** 8))
-        vec = np.random.randn(768).astype(np.float32)
-        return vec / np.linalg.norm(vec)
+        """
+        Generates deterministic 768-dimensional normalized term-frequency vectors.
+        Repeatable across Python processes and independent of random hash seeds.
+        """
+        dim = 768
+        vec = np.zeros(dim, dtype=np.float32)
+        words = re.findall(r"\w+", text.lower())
+
+        if not words:
+            vec[0] = 1.0
+            return vec
+
+        for word in words:
+            h = 0
+            for char in word:
+                h = (h * 31 + ord(char)) & 0xFFFFFFFF
+            idx = h % dim
+            sign = 1.0 if ((h >> 16) & 1) == 0 else -1.0
+            vec[idx] += sign
+
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            vec[0] = 1.0
+            return vec
+        return vec / norm
 
     @classmethod
     def compute_cosine_similarity(cls, vec_a: np.ndarray, vec_b: np.ndarray) -> float:
@@ -122,56 +145,84 @@ class CareerSyncAIEngine:
         prompt = (
             "Analyze this candidate's resume text:\n"
             "---\n"
-            f"{clean_resume_text}\n"
+            f"{clean_resume_text[:4000]}\n"
             "---\n\n"
             "Return a JSON object with these exact keys:\n"
-            "- quality_score: number from 0 to 100\n"
-            "- extracted_skills: list of skill strings\n"
-            "- action_verb_count: number\n"
-            "- metric_count: number\n"
-            "- weak_bullets: list of objects, each having 'original' and 'improved' keys (rewrite with high-impact STAR metrics)\n"
+            "- quality_score: integer from 0 to 100\n"
+            "- extracted_skills: list of technical skills found\n"
+            "- action_verb_count: integer\n"
+            "- metric_count: integer\n"
+            "- weak_bullets: list of objects with 'original' and 'improved' keys (rewrite using the STAR method)\n"
         )
-        fallback = {
-            "quality_score": 84,
-            "extracted_skills": ["Python", "FastAPI", "Docker", "SQL", "Git", "System Design"],
-            "action_verb_count": 6,
-            "metric_count": 4,
-            "weak_bullets": [
+        ai_result = cls._call_llm_json(prompt)
+        if ai_result and isinstance(ai_result.get("quality_score"), int):
+            return ai_result
+
+        from services.resume_auditor import ResumeAuditorService
+        audit = ResumeAuditorService.audit(clean_resume_text)
+        known_skills = ["Python", "FastAPI", "Docker", "SQL", "Git", "System Design", "AWS", "Linux"]
+        found = [s for s in known_skills if s.lower() in clean_resume_text.lower()]
+
+        return {
+            "quality_score": audit["score"],
+            "extracted_skills": found or ["Python", "Git"],
+            "action_verb_count": audit["verb_count"],
+            "metric_count": audit["metric_count"],
+            "weak_bullets": audit["weak_bullets"] or [
                 {
-                    "original": "Built a backend using Node.js for an e-commerce grocery store.",
-                    "improved": "Architected a scalable Node.js microservice handling 5,000+ daily orders with 99.8% uptime."
+                    "original": "Worked on backend development and database integration.",
+                    "improved": "Architected RESTful microservices handling 2,000+ daily transactions with 99.9% uptime."
                 }
             ]
         }
-        return cls._call_llm_json(prompt, fallback)
 
     @classmethod
     def evaluate_interview_response_with_ai(
-        cls, skill: str, question: str, candidate_answer: str, current_difficulty: int
+        cls,
+        question_obj: Dict[str, Any],
+        candidate_answer: str,
+        current_difficulty: int
     ) -> Dict[str, Any]:
+        """
+        Attempts evaluation via LLM with strict JSON schema verification.
+        Falls back to local rubric evaluation on failure or missing keys.
+        """
+        from services.interview_agent import InterviewAgentService
+
         prompt = (
-            "Role: Staff Software Engineer and Technical Placement Interviewer.\n"
-            f"Skill being evaluated: {skill}\n"
-            f"Question asked: \"{question}\"\n"
-            f"Current Difficulty Level: {current_difficulty} / 10\n"
-            f"Candidate's Answer: \"{candidate_answer}\"\n\n"
-            "Evaluate on technical precision and trade-offs. Return a JSON object with these exact keys:\n"
-            "- score: number from 0 to 10\n"
-            "- next_difficulty: number (if score > 8 increase by 1, if score < 5 decrease by 1, else keep same)\n"
-            "- adaptation_note: string with 1-sentence reason for difficulty adjustment\n"
-            "- matched_keywords: list of articulated concept strings\n"
-            "- missing_keywords: list of missed architecture concepts\n"
-            "- critique: string with constructive technical feedback\n"
+            "You are a Staff Software Engineer evaluating a candidate's answer in a technical interview.\n"
+            f"Question: \"{question_obj.get('question')}\"\n"
+            f"Ideal Keywords to listen for: {', '.join(question_obj.get('keywords', []))}\n"
+            f"Candidate Answer: \"{candidate_answer}\"\n"
+            f"Current Difficulty Level: {current_difficulty} / 10\n\n"
+            "Evaluate strictly based on the candidate's actual answer text. Do not invent coverage.\n"
+            "Return a JSON object with these exact keys:\n"
+            "- score: integer from 0 to 10\n"
+            "- next_difficulty: integer from 1 to 10 (raise by 1 if score >= 8, lower by 1 if score <= 4, else keep same)\n"
+            "- adaptation_note: string explaining why difficulty changed\n"
+            "- matched_keywords: list of keywords from the ideal list that the candidate genuinely mentioned\n"
+            "- missing_keywords: list of keywords from the ideal list that were omitted\n"
+            "- critique: constructive 1-2 sentence technical feedback\n"
         )
-        fallback = {
-            "score": 8,
-            "next_difficulty": min(10, current_difficulty + 1),
-            "adaptation_note": f"Strong conceptual articulation. Target difficulty raised to Level {min(10, current_difficulty + 1)}/10.",
-            "matched_keywords": ["chunking", "metadata", "sliding window"],
-            "missing_keywords": ["cross-encoder reranker"],
-            "critique": "Solid technical articulation of token chunking and retrieval context trade-offs."
-        }
-        return cls._call_llm_json(prompt, fallback)
+
+        parsed = cls._call_llm_json(prompt)
+        if parsed:
+            try:
+                score = max(0, min(10, int(parsed.get("score", 5))))
+                next_d = max(1, min(10, int(parsed.get("next_difficulty", current_difficulty))))
+                return {
+                    "score": score,
+                    "next_difficulty": next_d,
+                    "adaptation_note": str(parsed.get("adaptation_note", "Difficulty adapted based on performance.")),
+                    "matched_keywords": list(parsed.get("matched_keywords", [])),
+                    "missing_keywords": list(parsed.get("missing_keywords", [])),
+                    "critique": str(parsed.get("critique", "Response evaluated against technical requirements.")),
+                    "evaluated_by": "ai"
+                }
+            except Exception:
+                pass
+
+        return InterviewAgentService.evaluate_locally(question_obj, candidate_answer, current_difficulty)
 
     @classmethod
     def parse_job_link_with_ai(cls, page_text: str, url: str) -> Dict[str, Any]:
@@ -184,10 +235,13 @@ class CareerSyncAIEngine:
             "- required_skills: list of technical skill strings\n"
             "- eligibility_summary: string summary of minimum criteria\n"
         )
-        fallback = {
+        ai_res = cls._call_llm_json(prompt)
+        if ai_res and isinstance(ai_res.get("required_skills"), list):
+            return ai_res
+
+        return {
             "title": "Cloud & AI Systems Engineer",
             "company": "Enterprise Partner",
             "required_skills": ["Docker", "Kubernetes", "Vector Embeddings", "FastAPI"],
             "eligibility_summary": "Minimum 6.5 CGPA required for Tier-1 evaluation."
         }
-        return cls._call_llm_json(prompt, fallback)

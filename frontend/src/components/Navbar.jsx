@@ -14,10 +14,10 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
             <div className="flex items-center space-x-2">
               <span className="font-bold text-lg tracking-tight text-obsidian">CareerSync</span>
               <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full bg-terracotta-50 text-terracotta-600 border border-terracotta-100">
-                AI-Powered
+                Institutional Edition
               </span>
             </div>
-            <p className="text-xs text-subtle hidden sm:block">Smart Placement & Career Assistant</p>
+            <p className="text-xs text-subtle hidden sm:block">Intelligent Placement & Career Readiness</p>
           </div>
         </div>
 
@@ -25,18 +25,18 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
         <div className="hidden md:flex items-center space-x-4 text-xs text-subtle">
           <div className="flex items-center space-x-1.5 bg-surface px-3 py-1.5 rounded-full border border-[#E8E8E4] shadow-xs">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-medium text-obsidian">Privacy Protected</span>
-            <span className="text-emerald-700 font-semibold">(Personal info safe)</span>
+            <span className="font-medium text-obsidian">Privacy Shield</span>
+            <span className="text-emerald-700 font-semibold">Active</span>
           </div>
 
           <div className="flex items-center space-x-1.5 bg-surface px-3 py-1.5 rounded-full border border-[#E8E8E4] shadow-xs">
             <span className="w-2 h-2 rounded-full bg-terracotta-500"></span>
-            <span>AI Ready:</span>
-            <span className="font-semibold text-obsidian">{traceCount} actions logged</span>
+            <span>Live Analysis:</span>
+            <span className="font-semibold text-obsidian">{traceCount} actions verified</span>
           </div>
         </div>
 
-        {/* Navigation Buttons */}
+        {/* Controls */}
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setActivePortal('student')}
@@ -46,7 +46,7 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
                 : 'bg-surface text-obsidian hover:bg-cardMuted border border-[#E2E2DE]'
             }`}
           >
-            My Dashboard
+            Student Portal
           </button>
 
           {isAdminLoggedIn ? (
@@ -60,12 +60,12 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
                 }`}
               >
                 <UserCheck className="w-3.5 h-3.5" />
-                <span>Admin Dashboard</span>
+                <span>Placement Office</span>
               </button>
               <button
                 onClick={onAdminLogout}
                 className="p-2 rounded-full bg-surface hover:bg-rose-50 text-subtle hover:text-rose-600 border border-[#E2E2DE] transition-all"
-                title="Log Out of Admin"
+                title="Sign out of Administrative Portal"
               >
                 <LogOut className="w-3.5 h-3.5" />
               </button>
@@ -76,7 +76,7 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
               className="px-4 py-2 rounded-full text-xs font-semibold flex items-center space-x-1.5 bg-surface text-subtle hover:text-obsidian hover:bg-cardMuted border border-[#E2E2DE] transition-all"
             >
               <Lock className="w-3.5 h-3.5 text-subtle" />
-              <span>Admin Login</span>
+              <span>Officer Sign In</span>
             </button>
           )}
         </div>

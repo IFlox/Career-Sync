@@ -1,57 +1,118 @@
-from typing import Dict, Any
+"""
+CareerSync Interview Agent
+Unified service for adaptive question retrieval, response validation,
+and deterministic rubric evaluation.
+"""
+
+import re
+from typing import Dict, Any, List
+from pydantic import BaseModel, Field
 from data_seeds import INTERVIEW_QUESTION_BANK
 
-class InterviewAgentService:
-    """
-    Adaptive mock interview bot: Selects questions for skill gaps,
-    scores answers (0-10), and dynamically scales difficulty.
-    """
 
+class InterviewEvaluationSchema(BaseModel):
+    score: int = Field(..., ge=0, le=10)
+    next_difficulty: int = Field(..., ge=1, le=10)
+    adaptation_note: str
+    matched_keywords: List[str]
+    missing_keywords: List[str]
+    critique: str
+    evaluated_by: str = "ai"  # "ai" or "deterministic_rubric"
+
+
+class InterviewAgentService:
     @classmethod
     def get_question(cls, skill: str, difficulty: int = 6) -> Dict[str, Any]:
-        questions = INTERVIEW_QUESTION_BANK.get(skill, INTERVIEW_QUESTION_BANK["RAG Pipelines"])
-        # Match closest difficulty
-        closest = min(questions, key=lambda q: abs(q["difficulty"] - difficulty))
+        """
+        Retrieves the question closest to the requested difficulty level.
+        Falls back to a foundational question if the skill is unknown.
+        """
+        clamped_diff = max(1, min(10, difficulty))
+        questions = INTERVIEW_QUESTION_BANK.get(skill)
+
+        if not questions:
+            # Fallback for unrecognized skills
+            return {
+                "id": "gen-q1",
+                "level": "General Technical",
+                "question": f"Explain the core engineering concepts, architecture trade-offs, and best practices associated with {skill}.",
+                "keywords": ["scalability", "trade-offs", "performance", "architecture", "testing"],
+                "difficulty": clamped_diff
+            }
+
+        # Select question minimizing distance to target difficulty
+        closest = min(questions, key=lambda q: abs(q.get("difficulty", 6) - clamped_diff))
         return closest
 
     @classmethod
-    def evaluate_answer(cls, question: Dict[str, Any], answer_text: str, current_difficulty: int) -> Dict[str, Any]:
-        if not answer_text or len(answer_text.strip()) < 5:
+    def evaluate_locally(cls, question: Dict[str, Any], answer_text: str, current_diff: int) -> Dict[str, Any]:
+        """
+        Deterministic rubric evaluation.
+        Calculates score based on whole-word boundary matching of ideal keywords.
+        """
+        clean_ans = answer_text.strip()
+        words = clean_ans.split()
+        keywords = question.get("keywords", [])
+
+        if len(words) < 5:
+            next_d = max(1, current_diff - 1)
             return {
-                "score": 2,
-                "adaptation_note": "Answer was too brief. Difficulty decreased to consolidate basics.",
-                "next_difficulty": max(3, current_difficulty - 1),
-                "feedback": "Please elaborate on concrete engineering trade-offs and component choices."
+                "score": 1 if len(words) == 0 else 2,
+                "next_difficulty": next_d,
+                "adaptation_note": f"Response lacked sufficient technical detail. Difficulty lowered to {next_d}/10.",
+                "matched_keywords": [],
+                "missing_keywords": keywords,
+                "critique": "Your answer was too brief. Elaborate with specific system components and engineering trade-offs.",
+                "evaluated_by": "deterministic_rubric"
             }
 
-        text_lower = answer_text.lower()
-        keywords = question.get("keywords", [])
-        matched_kw = [kw for kw in keywords if kw.lower() in text_lower]
+        # Whole-word regex matching to prevent substring false-positives
+        matched = []
+        missing = []
+        for kw in keywords:
+            pattern = rf"\b{re.escape(kw.lower())}\b"
+            if re.search(pattern, clean_ans.lower()):
+                matched.append(kw)
+            else:
+                missing.append(kw)
 
-        ratio = len(matched_kw) / max(1, len(keywords))
-        score = int(round(ratio * 8)) + (2 if len(answer_text.split()) > 20 else 0)
-        score = max(2, min(10, score))
+        # Base scoring: 0 to 7 based on keyword coverage
+        coverage_ratio = len(matched) / max(1, len(keywords))
+        raw_score = int(round(coverage_ratio * 7))
 
-        # Adaptive difficulty adjustment rule
-        if score > 8:
-            next_diff = min(10, current_difficulty + 1)
-            adaptation_note = f"Outstanding precision! Difficulty increased to Level {next_diff}/10."
-        elif score < 5:
-            next_diff = max(3, current_difficulty - 1)
-            adaptation_note = f"Fundamentals need reinforcement. Difficulty lowered to Level {next_diff}/10."
+        # Elaboration bonus for substantial technical depth
+        if len(words) >= 30:
+            raw_score += 2
+        elif len(words) >= 15:
+            raw_score += 1
+
+        final_score = max(2, min(10, raw_score))
+
+        # Enforce server-side adaptive difficulty rule
+        if final_score >= 8:
+            next_diff = min(10, current_diff + 1)
+            adaptation_note = f"Demonstrated strong technical command. Increasing difficulty to {next_diff}/10."
+        elif final_score <= 4:
+            next_diff = max(1, current_diff - 1)
+            adaptation_note = f"Foundational concepts missed. Lowering difficulty to {next_diff}/10."
         else:
-            next_diff = current_difficulty
-            adaptation_note = f"Solid answer. Maintained difficulty target at Level {next_diff}/10."
+            next_diff = current_diff
+            adaptation_note = f"Consistent technical answer. Maintaining target difficulty at {next_diff}/10."
+
+        critique = (
+            f"You demonstrated good articulation on {', '.join(matched)}."
+            if matched else
+            "Your answer was structured, but did not mention key architectural terminology."
+        )
+        if missing:
+            critique += f" To improve, discuss trade-offs involving {', '.join(missing[:2])}."
 
         return {
-            "score": score,
+            "score": final_score,
             "next_difficulty": next_diff,
             "adaptation_note": adaptation_note,
-            "matched_keywords": matched_kw,
-            "missing_keywords": [kw for kw in keywords if kw.lower() not in text_lower],
-            "feedback": (
-                "Excellent technical articulation with verified terminology."
-                if score >= 7 else
-                f"Good start, but remember to mention key concepts like {', '.join(keywords[:2])}."
-            )
+            "matched_keywords": matched,
+            "missing_keywords": missing,
+            "critique": critique,
+            "evaluated_by": "deterministic_rubric"
         }
