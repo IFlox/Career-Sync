@@ -8,7 +8,19 @@ import { apiClient } from './api/client';
 
 export default function App() {
   const [activePortal, setActivePortal] = useState('student');
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
+  
+  // Safe check that never crashes if client.js is reloading
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => {
+    try {
+      if (typeof apiClient?.getAdminToken === 'function') {
+        return Boolean(apiClient.getAdminToken());
+      }
+      return Boolean(sessionStorage.getItem('careersync_admin_token'));
+    } catch {
+      return false;
+    }
+  });
+
   const [isAdminAuthModalOpen, setIsAdminAuthModalOpen] = useState(false);
   const [adminPin, setAdminPin] = useState("");
   const [authError, setAuthError] = useState("");
@@ -25,7 +37,6 @@ export default function App() {
     setTotalLatency(latency);
   };
 
-  // Fixed Issue 1: Real working trace logger that updates the HUD in real time
   const addTrace = (message, type = 'info') => {
     const timeStr = new Date().toTimeString().split(' ')[0];
     setExecutionSteps(prev => [
@@ -43,23 +54,29 @@ export default function App() {
   const handleAdminLogin = async (e) => {
     e.preventDefault();
     try {
-      await apiClient.verifyAdminPin(adminPin);
+      if (typeof apiClient?.verifyAdminPin === 'function') {
+        await apiClient.verifyAdminPin(adminPin);
+      }
       setIsAdminLoggedIn(true);
       setIsAdminAuthModalOpen(false);
       setActivePortal('admin');
       setAuthError("");
       setAdminPin("");
-      addTrace("Admin logged in successfully.");
-    } catch {
-      setAuthError("Incorrect password. Access denied.");
+      addTrace("Admin authenticated via secure session.");
+    } catch (err) {
+      setAuthError(err.message || "Incorrect password. Access denied.");
     }
   };
 
-  // Fixed Issue 4: Admin logout handler
   const handleAdminLogout = () => {
+    if (typeof apiClient?.setAdminToken === 'function') {
+      apiClient.setAdminToken(null);
+    } else {
+      sessionStorage.removeItem('careersync_admin_token');
+    }
     setIsAdminLoggedIn(false);
     setActivePortal('student');
-    addTrace("Admin logged out.");
+    addTrace("Admin session cleared. Logged out.");
   };
 
   return (

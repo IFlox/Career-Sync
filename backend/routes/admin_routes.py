@@ -1,31 +1,84 @@
+import os
 import io
 import csv
+import jwt
+from datetime import datetime, timedelta
+from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Depends, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
 from data_seeds import STUDENT_DATABASE
 
+load_dotenv()
+
 router = APIRouter(prefix="/admin", tags=["Placement Cell (TPO)"])
+
+SECRET_KEY = os.getenv("SECRET_KEY", "careersync_default_secret_jwt_key_2026")
+ADMIN_PIN = os.getenv("ADMIN_PIN", "tpo_secure_2026")
+JWT_ALGORITHM = "HS256"
 
 class LoginRequest(BaseModel):
     pin: str
 
 class StatusUpdateRequest(BaseModel):
     student_id: str
-    new_status: str
+    new_status: Literal["Approved", "Revision Required", "Pending"]
 
-def verify_tpo_token(x_admin_pin: str = Header(None)):
-    if x_admin_pin != "tpo_secure_2026":
-        raise HTTPException(status_code=403, detail="Invalid Security PIN. Access denied.")
-    return True
 
-# Backend password verification
+def create_admin_token() -> str:
+    payload = {
+        "sub": "tpo_admin",
+        "role": "ADMIN",
+        "exp": datetime.utcnow() + timedelta(hours=12)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def verify_tpo_token(
+    authorization: Optional[str] = Header(None),
+    x_admin_token: Optional[str] = Header(None),
+    x_admin_pin: Optional[str] = Header(None)
+):
+    """
+    Validates either:
+    1. Signed JWT Bearer token in 'Authorization: Bearer <token>'
+    2. Signed JWT in 'x-admin-token'
+    3. Direct matching PIN in 'x-admin-pin' (dev fallback)
+    """
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+    elif x_admin_token:
+        token = x_admin_token
+
+    if token:
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            if payload.get("role") == "ADMIN":
+                return True
+        except jwt.PyJWTError:
+            raise HTTPException(status_code=401, detail="Invalid or expired admin session token.")
+
+    # Direct PIN match fallback
+    if x_admin_pin and x_admin_pin == ADMIN_PIN:
+        return True
+
+    raise HTTPException(status_code=401, detail="Unauthorized: Valid admin authentication token is required.")
+
+
 @router.post("/auth/verify")
 def verify_admin_pin(payload: LoginRequest):
-    if payload.pin == "tpo_secure_2026":
-        return {"status": "authorized", "token": "tpo_token_valid"}
+    if payload.pin == ADMIN_PIN:
+        token = create_admin_token()
+        return {
+            "status": "authorized",
+            "token": token,
+            "token_type": "bearer"
+        }
     raise HTTPException(status_code=401, detail="Incorrect admin password.")
+
 
 @router.get("/analytics/overview")
 def get_cohort_overview(authorized: bool = Depends(verify_tpo_token)):
@@ -49,23 +102,26 @@ def get_cohort_overview(authorized: bool = Depends(verify_tpo_token)):
         ]
     }
 
+
 @router.get("/matrix")
 def get_verification_matrix(authorized: bool = Depends(verify_tpo_token)):
     return {
         "students": STUDENT_DATABASE
     }
 
+
 @router.patch("/matrix/status")
 def update_student_status(payload: StatusUpdateRequest, authorized: bool = Depends(verify_tpo_token)):
     student = next((s for s in STUDENT_DATABASE if s["id"] == payload.student_id), None)
     if not student:
-        raise HTTPException(status_code=404, detail="Student ID not found")
+        raise HTTPException(status_code=404, detail="Student ID not found in database.")
     student["admin_status"] = payload.new_status
     return {
         "status": "updated",
         "student_id": payload.student_id,
         "new_status": payload.new_status
     }
+
 
 @router.get("/export/csv")
 def export_verified_csv(authorized: bool = Depends(verify_tpo_token)):

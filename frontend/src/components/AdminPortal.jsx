@@ -11,14 +11,14 @@ export default function AdminPortal({ addTrace }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
 
-  // Sync with live backend database
   const fetchMatrix = () => {
     setIsLoading(true);
     apiClient.getVerificationMatrix()
       .then(data => {
         setStudents(data.students || []);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("Matrix load failed:", err);
         setStudents(DEMO_PROFILES);
       })
       .finally(() => setIsLoading(false));
@@ -28,24 +28,33 @@ export default function AdminPortal({ addTrace }) {
     fetchMatrix();
   }, []);
 
-  // Live status update via backend PATCH
+  // Safe mutation with rollback on failure
   const handleToggleStatus = async (id, newStatus) => {
+    const previousStudents = [...students];
+
+    // Optimistic UI update
+    setStudents(prev => prev.map(s => s.id === id ? { ...s, adminStatus: newStatus, admin_status: newStatus } : s));
+
     try {
       await apiClient.updateStudentStatus(id, newStatus);
-      setStudents(prev => prev.map(s => s.id === id ? { ...s, adminStatus: newStatus } : s));
-      addTrace?.(`[ADMIN APPROVAL]: Marked candidate ${id} as '${newStatus}' in database.`);
-    } catch {
-      setStudents(prev => prev.map(s => s.id === id ? { ...s, adminStatus: newStatus } : s));
+      addTrace?.(`[ADMIN GATE]: Confirmed status change for candidate ${id} -> ${newStatus}`);
+    } catch (err) {
+      // Rollback on failure
+      setStudents(previousStudents);
+      alert(`Server rejected status update: ${err.message}`);
+      addTrace?.(`[ADMIN ERROR]: Status change failed for ${id}. Reverted.`, 'error');
     }
   };
 
-  // Live streaming CSV export from backend
+  // Authenticated CSV export
   const handleExportCSV = async () => {
     try {
-      addTrace?.("[EXPORT]: Downloading verified cohort CSV from backend...");
+      addTrace?.("[EXPORT]: Requesting verified cohort CSV from server...");
       const res = await fetch(apiClient.getExportCSVUrl(), {
-        headers: { 'x-admin-pin': 'tpo_secure_2026' }
+        headers: apiClient.getAdminHeaders()
       });
+      if (!res.ok) throw new Error("Server rejected export request (unauthorized or session expired).");
+
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -55,14 +64,14 @@ export default function AdminPortal({ addTrace }) {
       a.click();
       document.body.removeChild(a);
     } catch (err) {
-      alert("Failed to export from server. Using local backup.");
+      alert(`Failed to export CSV: ${err.message}`);
     }
   };
 
   const avgScore = students.length > 0
     ? Math.round(students.reduce((acc, s) => acc + (s.qualityScore || s.quality_score || 70), 0) / students.length)
     : 75;
-  const highRiskCount = students.filter(s => s.cgpa < 6.0 || (s.qualityScore || s.quality_score) < 45).length;
+  const highRiskCount = students.filter(s => (s.cgpa || 0) < 6.0 || (s.qualityScore || s.quality_score || 0) < 45).length;
   const approvedCount = students.filter(s => (s.adminStatus || s.admin_status) === "Approved").length;
 
   return (

@@ -10,18 +10,19 @@ load_dotenv()
 
 app = FastAPI(
     title="CareerSync Agent API",
-    description="Agentic Placement Readiness, Market Radar & Career Matching Backend (PS-06)",
+    description="Intelligent Placement Readiness, Market Radar & Career Matching Backend (PS-06)",
     version="2.4.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-# CORS Configuration for React Frontend
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+# Parse explicit allowed origins from environment (prevents CORS rejection with allow_credentials)
+raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permits local dev testing across Vite ports
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
