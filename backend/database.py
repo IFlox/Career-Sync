@@ -1,12 +1,13 @@
 """
-CareerSync PostgreSQL Database Engine
+CareerSync PostgreSQL & SQLite Database Engine
 Full implementation supporting Students, Preferences, Applications, Feedback, and Role Readiness.
-Works with PostgreSQL or auto-falls back to local SQLite.
+Includes the reset_workspace() function to clear mutations and restore baseline demo states.
 """
 
 import os
 import json
 import time
+import uuid
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text, MetaData
@@ -17,6 +18,10 @@ load_dotenv()
 
 RAW_DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/careersync")
 SQLITE_FALLBACK_URL = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'careersync.db')}"
+
+# Normalize URL driver prefix
+if RAW_DB_URL.startswith("postgresql://"):
+    RAW_DB_URL = RAW_DB_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 try:
     engine = create_engine(RAW_DB_URL, pool_pre_ping=True)
@@ -55,7 +60,7 @@ def init_db():
         );
         """))
 
-        # 2. Student Preferences Table (Persistent Intent)
+        # 2. Student Preferences Table
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS student_preferences (
             student_id VARCHAR(64) PRIMARY KEY,
@@ -70,7 +75,7 @@ def init_db():
         );
         """))
 
-        # 3. Recommendation Feedback Table (Bookmark / Hide / Reject)
+        # 3. Recommendation Feedback Table
         if IS_POSTGRES:
             conn.execute(text("""
             CREATE TABLE IF NOT EXISTS recommendation_feedback (
@@ -153,6 +158,28 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """))
+
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS progress_milestones (
+                student_id VARCHAR(64) NOT NULL,
+                week_number INTEGER NOT NULL,
+                PRIMARY KEY (student_id, week_number)
+            );
+            """))
+
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS readiness_history (
+                id VARCHAR(64) PRIMARY KEY,
+                student_id VARCHAR(64) NOT NULL,
+                day_label VARCHAR(50) NOT NULL,
+                display_date VARCHAR(50) NOT NULL,
+                readiness INTEGER NOT NULL
+            );
+            """))
+            conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_applications_student_job
+            ON applications (student_id, job_id);
+            """))
         else:
             conn.execute(text("""
             CREATE TABLE IF NOT EXISTS progress_events (
@@ -164,51 +191,102 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """))
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS progress_milestones (
+                student_id VARCHAR(64) NOT NULL,
+                week_number INTEGER NOT NULL,
+                PRIMARY KEY (student_id, week_number)
+            );
+            """))
+            conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS readiness_history (
+                id VARCHAR(64) PRIMARY KEY,
+                student_id VARCHAR(64) NOT NULL,
+                day_label VARCHAR(50) NOT NULL,
+                display_date VARCHAR(50) NOT NULL,
+                readiness INTEGER NOT NULL
+            );
+            """))
+            conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_applications_student_job
+            ON applications (student_id, job_id);
+            """))
 
-        # Seed initial candidates and preferences if empty
+        # Seed baseline demo profiles if empty
         count = conn.execute(text("SELECT COUNT(*) FROM students")).scalar()
         if count == 0:
-            for s in SEED_STUDENTS:
-                conn.execute(text("""
-                INSERT INTO students 
-                (id, name, email, phone, address, branch, cgpa, active_apps_count, sla_hours_pending, admin_status, target_role, skills, raw_resume, quality_score)
-                VALUES 
-                (:id, :name, :email, :phone, :address, :branch, :cgpa, :active_apps_count, :sla_hours_pending, :admin_status, :target_role, :skills, :raw_resume, :quality_score)
-                """), {
-                    "id": s["id"],
-                    "name": s["name"],
-                    "email": s["email"],
-                    "phone": s.get("phone", "[PROTECTED_PHONE]"),
-                    "address": s.get("address", "[PROTECTED_RESIDENCE]"),
-                    "branch": s["branch"],
-                    "cgpa": float(s["cgpa"]),
-                    "active_apps_count": s.get("active_apps_count", 0),
-                    "sla_hours_pending": s.get("sla_hours_pending", 0),
-                    "admin_status": s.get("admin_status", "Pending"),
-                    "target_role": s.get("target_role", "job-ai-sys"),
-                    "skills": json.dumps(s.get("skills", [])),
-                    "raw_resume": s.get("raw_resume", ""),
-                    "quality_score": s.get("quality_score", 75)
-                })
-
-                conn.execute(text("""
-                INSERT INTO student_preferences 
-                (student_id, preferred_roles, preferred_locations, preferred_industries, target_technologies, min_expected_ctc_lpa, learning_style, available_hours_per_week)
-                VALUES 
-                (:student_id, :preferred_roles, :preferred_locations, :preferred_industries, :target_technologies, :min_expected_ctc_lpa, :learning_style, :available_hours_per_week)
-                """), {
-                    "student_id": s["id"],
-                    "preferred_roles": json.dumps([s.get("target_role", "job-ai-sys"), "Distributed Backend Developer"]),
-                    "preferred_locations": json.dumps(["Bangalore", "Pune", "Remote"]),
-                    "preferred_industries": json.dumps(["Enterprise AI", "FinTech", "SaaS"]),
-                    "target_technologies": json.dumps(s.get("skills", [])[:4] or ["Python", "Docker"]),
-                    "min_expected_ctc_lpa": 8.0 if s["cgpa"] >= 7.5 else 5.5,
-                    "learning_style": "PROJECT_BASED",
-                    "available_hours_per_week": 10
-                })
+            StudentRepository._seed_default_data(conn)
 
 
 class StudentRepository:
+    @staticmethod
+    def _seed_default_data(conn):
+        for s in SEED_STUDENTS:
+            conn.execute(text("""
+            INSERT INTO students
+            (id, name, email, phone, address, branch, cgpa, active_apps_count, sla_hours_pending, admin_status, target_role, skills, raw_resume, quality_score)
+            VALUES
+            (:id, :name, :email, :phone, :address, :branch, :cgpa, :active_apps_count, :sla_hours_pending, :admin_status, :target_role, :skills, :raw_resume, :quality_score)
+            """), {
+                "id": s["id"],
+                "name": s["name"],
+                "email": s["email"],
+                "phone": s.get("phone", "[PROTECTED_PHONE]"),
+                "address": s.get("address", "[PROTECTED_RESIDENCE]"),
+                "branch": s["branch"],
+                "cgpa": float(s["cgpa"]),
+                "active_apps_count": s.get("active_apps_count", 0),
+                "sla_hours_pending": s.get("sla_hours_pending", 0),
+                "admin_status": s.get("admin_status", "Pending"),
+                "target_role": s.get("target_role", "job-ai-sys"),
+                "skills": json.dumps(s.get("skills", [])),
+                "raw_resume": s.get("raw_resume", ""),
+                "quality_score": s.get("quality_score", 75)
+            })
+
+            conn.execute(text("""
+            INSERT INTO student_preferences
+            (student_id, preferred_roles, preferred_locations, preferred_industries, target_technologies, min_expected_ctc_lpa, learning_style, available_hours_per_week)
+            VALUES
+            (:student_id, :preferred_roles, :preferred_locations, :preferred_industries, :target_technologies, :min_expected_ctc_lpa, :learning_style, :available_hours_per_week)
+            """), {
+                "student_id": s["id"],
+                "preferred_roles": json.dumps([s.get("target_role", "job-ai-sys"), "Distributed Backend Developer"]),
+                "preferred_locations": json.dumps(["Bangalore", "Pune", "Remote"]),
+                "preferred_industries": json.dumps(["Enterprise AI", "FinTech", "SaaS"]),
+                "target_technologies": json.dumps(s.get("skills", [])[:4] or ["Python", "Docker"]),
+                "min_expected_ctc_lpa": 8.0 if s["cgpa"] >= 7.5 else 5.5,
+                "learning_style": "PROJECT_BASED",
+                "available_hours_per_week": 10
+            })
+
+    @staticmethod
+    def reset_workspace() -> Dict[str, Any]:
+        """
+        Pushes the workspace back to pristine demo state.
+        Purges uploaded candidate records, transient applications, and logs,
+        and re-seeds Priya, Rahul, and Amit.
+        """
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM applications"))
+            conn.execute(text("DELETE FROM recommendation_feedback"))
+            conn.execute(text("DELETE FROM progress_events"))
+            conn.execute(text("DELETE FROM progress_milestones"))
+            conn.execute(text("DELETE FROM readiness_history"))
+            conn.execute(text("DELETE FROM role_readiness_snapshots"))
+            conn.execute(text("DELETE FROM student_preferences"))
+            conn.execute(text("DELETE FROM students"))
+            StudentRepository._seed_default_data(conn)
+
+        from services.progress_tracker import ProgressTrackerService
+        ProgressTrackerService.reset_progress_state()
+
+        return {
+            "status": "success",
+            "message": "Demo workspace successfully reset to baseline seed state.",
+            "seeded_candidates": ["stud-01", "stud-02", "stud-03"]
+        }
+
     @staticmethod
     def get_all() -> List[Dict[str, Any]]:
         with engine.connect() as conn:
@@ -285,8 +363,23 @@ class StudentRepository:
 
     @staticmethod
     def record_application(student_id: str, job_id: str, job_title: str, company: str, tier: str):
-        app_id = f"app-{int(time.time())}"
+        app_id = f"app-{uuid.uuid4().hex[:12]}"
         with engine.begin() as conn:
+            updated = conn.execute(text("""
+                UPDATE students
+                SET active_apps_count = active_apps_count + 1
+                WHERE id = :student_id AND active_apps_count < 3
+            """), {"student_id": student_id})
+            if updated.rowcount != 1:
+                raise ValueError("Application cap reached or student profile is unavailable.")
+
+            existing = conn.execute(text("""
+                SELECT 1 FROM applications
+                WHERE student_id = :student_id AND job_id = :job_id
+            """), {"student_id": student_id, "job_id": job_id}).scalar()
+            if existing:
+                raise ValueError("An application for this job already exists.")
+
             conn.execute(text("""
             INSERT INTO applications (id, student_id, job_id, job_title, company, tier)
             VALUES (:id, :student_id, :job_id, :job_title, :company, :tier)
@@ -294,7 +387,6 @@ class StudentRepository:
                 "id": app_id, "student_id": student_id, "job_id": job_id,
                 "job_title": job_title, "company": company, "tier": tier
             })
-            conn.execute(text("UPDATE students SET active_apps_count = active_apps_count + 1 WHERE id = :id"), {"id": student_id})
 
 
 class PreferenceRepository:

@@ -1,7 +1,16 @@
 import React from 'react';
-import { Lock, UserCheck, LogOut } from 'lucide-react';
+import { Lock, UserCheck, LogOut, RotateCcw } from 'lucide-react';
 
-export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthModalOpen, isAdminLoggedIn, onAdminLogout, traceCount }) {
+export default function Navbar({
+  activePortal,
+  setActivePortal,
+  setIsAdminAuthModalOpen,
+  isAdminLoggedIn,
+  onAdminLogout,
+  onResetWorkspace,
+  isResettingWorkspace,
+  traceCount
+}) {
   return (
     <header className="sticky top-0 z-40 bg-canvas/80 backdrop-blur-md border-b border-[#E6E6E3] px-6 py-3.5">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -36,8 +45,19 @@ export default function Navbar({ activePortal, setActivePortal, setIsAdminAuthMo
           </div>
         </div>
 
-        {/* Controls */}
+        {/* Action Controls */}
         <div className="flex items-center space-x-2">
+          {/* Sprint 3: Reset Workspace Action */}
+          <button
+            onClick={onResetWorkspace}
+            disabled={isResettingWorkspace}
+            className="px-3 py-2 rounded-full bg-surface hover:bg-[#EAEAEA] border border-[#E2E2DE] text-xs font-semibold text-subtle hover:text-obsidian flex items-center space-x-1.5 transition-all shadow-xs disabled:opacity-50"
+            title="Reset demo candidates and applications to baseline seed states"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isResettingWorkspace ? 'animate-spin text-terracotta-500' : ''}`} />
+            <span className="hidden sm:inline">{isResettingWorkspace ? "Resetting..." : "Reset Workspace"}</span>
+          </button>
+
           <button
             onClick={() => setActivePortal('student')}
             className={`px-4 py-2 rounded-full text-xs font-semibold transition-all ${

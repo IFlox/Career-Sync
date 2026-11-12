@@ -1,11 +1,11 @@
 """
-CareerSync Composite Semantic & Preference Matching Engine
-Calculates:
+CareerSync Composite Semantic & Preference Matching Engine (Sprint 2)
+Computes:
 1. Skill Fit (45%): Vector cosine similarity & required skill coverage
 2. Preference Alignment (30%): Role, location, and technology stack overlap
 3. Academic SOP Eligibility (15%): University CGPA tier and application caps
 4. Recommendation Feedback (10%): Bookmark boost (+10%) or Hidden penalty (-50%)
-Also generates grounded 'Why this role fits you' explainability statements.
+Attaches data_mode provenance metadata to every evaluation output.
 """
 
 import numpy as np
@@ -32,9 +32,7 @@ class SemanticMatchingEngine:
         candidate_skills = [s.strip().lower() for s in candidate.get("skills", [])]
         required_skills = target_job.get("required_skills") or target_job.get("requiredSkills") or []
 
-        # -------------------------------------------------------------
         # 1. Skill Fit Calculation (45% Weight)
-        # -------------------------------------------------------------
         matched_skills = []
         missing_skills = []
         for req in required_skills:
@@ -55,9 +53,7 @@ class SemanticMatchingEngine:
         skill_fit_score = (cosine_sim * 60.0) + (skill_coverage_ratio * 40.0)
         skill_fit_score = max(15.0, min(100.0, skill_fit_score))
 
-        # -------------------------------------------------------------
         # 2. Preference Alignment Calculation (30% Weight)
-        # -------------------------------------------------------------
         fit_reasons = []
         caution_notes = []
 
@@ -67,23 +63,25 @@ class SemanticMatchingEngine:
         target_techs = [t.lower() for t in pref.get("target_technologies", [])]
 
         job_title = target_job.get("title", "").lower()
-        job_loc = target_job.get("location", "Remote").lower()
+        job_location = target_job.get("location")
+        job_loc = job_location.lower() if isinstance(job_location, str) else ""
 
-        # Role alignment (0 to 35 points)
         role_aligned = any(r in job_title or job_title in r for r in pref_roles)
         role_points = 35.0 if role_aligned else 15.0
         if role_aligned:
             fit_reasons.append("Directly matches your target role preferences")
 
-        # Location alignment (0 to 30 points)
-        loc_aligned = "remote" in job_loc or any(l in job_loc for l in pref_locs) or not pref_locs
+        loc_aligned = (
+            ("remote" in job_loc)
+            or any(l in job_loc for l in pref_locs)
+            or (not pref_locs and bool(job_loc))
+        )
         loc_points = 30.0 if loc_aligned else 10.0
         if loc_aligned:
-            fit_reasons.append(f"Work location ({target_job.get('location', 'Remote / Flexible')}) aligns with your choices")
+            fit_reasons.append(f"Work location ({job_location or 'Not provided'}) aligns with your choices")
         else:
-            caution_notes.append(f"Job location ({target_job.get('location', 'On-site')}) may require relocation")
+            caution_notes.append(f"Job location ({job_location or 'Not provided'}) needs confirmation")
 
-        # Technology stack overlap (0 to 35 points)
         matching_tech = [t for t in target_techs if any(t in req.lower() for req in required_skills)]
         tech_ratio = len(matching_tech) / max(1, len(target_techs)) if target_techs else 0.7
         tech_points = min(35.0, tech_ratio * 35.0)
@@ -92,9 +90,7 @@ class SemanticMatchingEngine:
 
         pref_alignment_score = role_points + loc_points + tech_points
 
-        # -------------------------------------------------------------
         # 3. Academic SOP Eligibility (15% Weight)
-        # -------------------------------------------------------------
         sop_violations = []
         is_eligible = True
         cand_cgpa = float(candidate.get("cgpa", 7.5))
@@ -112,9 +108,7 @@ class SemanticMatchingEngine:
             sop_violations.append(f"Application Cap: Already enrolled in {active_apps}/3 concurrent drives")
             eligibility_score = min(eligibility_score, 40.0)
 
-        # -------------------------------------------------------------
         # 4. Recommendation Feedback Multiplier (10% Weight)
-        # -------------------------------------------------------------
         feedback_boost = 0.0
         is_saved = False
         is_hidden = False
@@ -132,9 +126,7 @@ class SemanticMatchingEngine:
                         is_hidden = True
                         caution_notes.append("Marked as hidden by you")
 
-        # -------------------------------------------------------------
         # Composite Weighted Score
-        # -------------------------------------------------------------
         raw_composite = (
             (0.45 * skill_fit_score) +
             (0.30 * pref_alignment_score) +
@@ -147,6 +139,10 @@ class SemanticMatchingEngine:
 
         if not fit_reasons:
             fit_reasons.append("Foundational technical overlap with campus requirements")
+
+        # Attach explicit provenance metadata
+        candidate_data_mode = candidate.get("data_mode", "DEMO_DATA")
+        job_data_mode = target_job.get("data_mode", "DEMO_DATA")
 
         return {
             "match_percentage": match_percentage,
@@ -161,5 +157,11 @@ class SemanticMatchingEngine:
             "is_saved": is_saved,
             "is_hidden": is_hidden,
             "fit_reasons": fit_reasons,
-            "caution_notes": caution_notes
+            "caution_notes": caution_notes,
+            "data_mode": "LIVE_DATA" if job_data_mode == "LIVE_DATA" and candidate_data_mode == "LIVE_DATA" else "DEMO_DATA",
+            "source_provenance": {
+                "candidate_mode": candidate_data_mode,
+                "job_mode": job_data_mode,
+                "job_source": target_job.get("source_label", "Curated Role")
+            }
         }

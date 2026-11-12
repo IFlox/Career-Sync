@@ -1,10 +1,9 @@
 """
-CareerSync Student Routes (Phase 5 Complete Edition)
-Integrates:
-- Closed-loop Next Best Action engine
-- Multi-style personalized roadmaps
-- Preference-aware job ranking
-- Real PDF ingestion & PII scrubbing
+CareerSync Student Routes (Sprint 2 Provenance Standard)
+Enforces:
+- data_mode: "LIVE_DATA" | "DEMO_DATA" | "UNAVAILABLE"
+- Standardized error codes (400, 404, 413, 422, 503)
+- Reset endpoint: POST /api/v1/students/workspace/reset
 """
 
 import re
@@ -15,22 +14,24 @@ import ipaddress
 import requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
+from sqlalchemy.exc import IntegrityError
 
 from database import StudentRepository, PreferenceRepository
 from services.live_jobs import LiveJobProvider
 from services.policy_engine import UniversityPolicyEngine
 from services.pdf_parser import PDFResumeParser
 from services.pii_scrubber import PIIScrubberService
-from services.ai_engine import CareerSyncAIEngine
+from services.ai_engine import CareerSyncAIEngine, AIProviderUnavailableError
 from services.resume_auditor import ResumeAuditorService
 from services.matching_engine import SemanticMatchingEngine
 from services.market_radar import MarketRadarService
 from services.interview_agent import InterviewAgentService
 from services.progress_tracker import ProgressTrackerService
 from services.upskilling_planner import UpskillingPlannerService
+from services.admin_auth import verify_tpo_token
 from data_seeds import VERIFIED_LEARNING_CATALOG, HACKATHON_SEEDS
 
 router = APIRouter(prefix="/students", tags=["Student Portal"])
@@ -45,11 +46,11 @@ class AnswerSubmitRequest(BaseModel):
     student_id: str = "stud-01"
     skill: str = "RAG Pipelines"
     question_text: Optional[str] = None
-    answer_text: str = Field(..., max_length=2000)
+    answer_text: str = Field(..., min_length=2, max_length=2000)
     current_difficulty: int = Field(6, ge=1, le=10)
 
 class MilestoneToggleRequest(BaseModel):
-    week_number: int
+    week_number: int = Field(..., ge=1, le=4)
     current_readiness: int = 75
 
 class UrlIngestRequest(BaseModel):
@@ -83,37 +84,45 @@ def validate_public_url(url_str: str) -> None:
     try:
         parsed = urlparse(url_str)
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid URL format.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL format.")
 
     if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Only HTTP and HTTPS URLs are permitted.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only HTTP and HTTPS URLs are permitted.")
 
     hostname = parsed.hostname
     if not hostname or hostname.lower() in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
-        raise HTTPException(status_code=400, detail="Access to local or invalid hostnames is prohibited.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Access to local or private hostnames is strictly prohibited.")
 
     try:
         resolved_ips = socket.getaddrinfo(hostname, None)
     except Exception:
-        raise HTTPException(status_code=400, detail="Unable to resolve hostname DNS.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to resolve hostname DNS.")
 
     for item in resolved_ips:
         ip_obj = ipaddress.ip_address(item[4][0])
         if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-            raise HTTPException(status_code=400, detail="Access to private IP space is prohibited.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Access to private IP space is prohibited.")
 
 
-# =====================================================================
-# Phase 5: Closed-Loop Next Best Action Endpoint
-# =====================================================================
+@router.post("/workspace/reset")
+def reset_workspace_endpoint(authorized: bool = Depends(verify_tpo_token)):
+    result = StudentRepository.reset_workspace()
+    return result
+
+
 @router.get("/{student_id}/recommendations/next-action")
 def get_next_best_action(student_id: str, job_id: str = "job-ai-sys"):
     student = StudentRepository.get_by_id(student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found.")
 
     all_jobs = LiveJobProvider.get_jobs()
-    target_job = next((j for j in all_jobs if j["id"] == job_id), all_jobs[0])
+    target_job = next((j for j in all_jobs if j["id"] == job_id), None)
+    if not target_job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Requested job opportunity was not found."
+        )
 
     preferences = PreferenceRepository.get_preferences(student_id)
     match_res = SemanticMatchingEngine.evaluate(student, target_job, preferences)
@@ -125,12 +134,12 @@ def get_next_best_action(student_id: str, job_id: str = "job-ai-sys"):
         missing_skills=missing,
         current_readiness=match_res.get("match_percentage", 75)
     )
-    return action
+    return {
+        **action,
+        "data_mode": target_job.get("data_mode", "DEMO_DATA")
+    }
 
 
-# =====================================================================
-# Student Preferences & Feedback Endpoints
-# =====================================================================
 @router.get("/{student_id}/preferences")
 def get_student_preferences(student_id: str):
     return PreferenceRepository.get_preferences(student_id)
@@ -142,7 +151,8 @@ def update_student_preferences(student_id: str, payload: PreferencesUpdateReques
     return {
         "status": "success",
         "message": "Preferences updated successfully.",
-        "preferences": PreferenceRepository.get_preferences(student_id)
+        "preferences": PreferenceRepository.get_preferences(student_id),
+        "data_mode": "LIVE_DATA"
     }
 
 
@@ -155,19 +165,19 @@ def submit_recommendation_feedback(payload: FeedbackSubmitRequest):
         action=payload.action,
         reason=payload.reason
     )
-    return {"status": "success", "action": payload.action, "entity_id": payload.entity_id}
+    return {"status": "success", "action": payload.action, "entity_id": payload.entity_id, "data_mode": "LIVE_DATA"}
 
 
 @router.get("/{student_id}/feedback")
 def get_student_feedback(student_id: str):
-    return {"feedback": PreferenceRepository.get_feedback(student_id)}
+    return {"feedback": PreferenceRepository.get_feedback(student_id), "data_mode": "LIVE_DATA"}
 
 
 @router.get("/{student_id}/ranked-jobs")
 def get_ranked_jobs_for_student(student_id: str):
     student = StudentRepository.get_by_id(student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found.")
 
     preferences = PreferenceRepository.get_preferences(student_id)
     feedback_list = PreferenceRepository.get_feedback(student_id)
@@ -196,17 +206,29 @@ def get_ranked_jobs_for_student(student_id: str):
         reverse=True
     )
 
-    return {"ranked_jobs": ranked_jobs}
+    return {
+        "ranked_jobs": ranked_jobs,
+        "data_provenance": {
+            "total_count": len(ranked_jobs),
+            "live_count": sum(1 for j in ranked_jobs if j.get("data_mode") == "LIVE_DATA"),
+            "demo_count": sum(1 for j in ranked_jobs if j.get("data_mode") == "DEMO_DATA")
+        }
+    }
 
 
 @router.get("/roadmap/{student_id}")
 def get_upskilling_roadmap(student_id: str, job_id: str = "job-ai-sys"):
     student = StudentRepository.get_by_id(student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found for roadmap.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found.")
 
     all_jobs = LiveJobProvider.get_jobs()
-    target_job = next((j for j in all_jobs if j["id"] == job_id), all_jobs[0])
+    target_job = next((j for j in all_jobs if j["id"] == job_id), None)
+    if not target_job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Requested job opportunity was not found for roadmap."
+        )
     preferences = PreferenceRepository.get_preferences(student_id)
     progress_data = ProgressTrackerService.get_progress(student_id)
     completed_milestones = progress_data.get("completed_milestones", [])
@@ -220,24 +242,39 @@ def get_upskilling_roadmap(student_id: str, job_id: str = "job-ai-sys"):
         preferences=preferences,
         completed_weeks=completed_milestones
     )
-    return personalized_plan
+    return {
+        **personalized_plan,
+        "data_mode": "DEMO_DATA"  # Curated registry verified by college placement office
+    }
 
 
 @router.get("/jobs/live")
 def get_live_job_catalogue():
-    return {"jobs": LiveJobProvider.get_jobs()}
+    jobs = LiveJobProvider.get_jobs()
+    return {
+        "jobs": jobs,
+        "feed_metadata": {
+            "total": len(jobs),
+            "live_count": sum(1 for j in jobs if j.get("data_mode") == "LIVE_DATA"),
+            "curated_count": sum(1 for j in jobs if j.get("data_mode") == "DEMO_DATA")
+        }
+    }
 
 
 @router.get("/policy")
 def get_university_policy():
-    return UniversityPolicyEngine.load_policy()
+    return {
+        "policy": UniversityPolicyEngine.load_policy(),
+        "data_mode": "DEMO_DATA",
+        "authority": "JKLU Institutional Placement Regulation"
+    }
 
 
 @router.post("/applications/submit")
 def submit_campus_application(payload: ApplicationSubmitRequest):
     student = StudentRepository.get_by_id(payload.student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found.")
 
     eligibility = UniversityPolicyEngine.evaluate_eligibility(
         student_cgpa=student.get("cgpa", 0.0),
@@ -246,27 +283,33 @@ def submit_campus_application(payload: ApplicationSubmitRequest):
     )
 
     if not eligibility["is_eligible"]:
-        raise HTTPException(status_code=400, detail="; ".join(eligibility["violations"]))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="; ".join(eligibility["violations"])
+        )
 
-    StudentRepository.record_application(
+    try:
+        StudentRepository.record_application(
+            student_id=payload.student_id,
+            job_id=payload.job_id,
+            job_title=payload.job_title,
+            company=payload.company,
+            tier=payload.tier
+        )
+    except (ValueError, IntegrityError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    ProgressTrackerService.log_application(
         student_id=payload.student_id,
-        job_id=payload.job_id,
         job_title=payload.job_title,
-        company=payload.company,
-        tier=payload.tier
-    )
-
-    ProgressTrackerService.log_interview_attempt(
-        student_id=payload.student_id,
-        skill="Campus Application",
-        score=9,
-        current_readiness=80
+        company=payload.company
     )
 
     return {
         "status": "success",
         "message": f"Successfully enrolled in {payload.job_title} recruitment drive.",
-        "active_applications": student.get("active_apps_count", 0) + 1
+        "active_applications": student.get("active_apps_count", 0) + 1,
+        "data_mode": "LIVE_DATA"
     }
 
 
@@ -280,13 +323,16 @@ async def upload_pdf_resume(
 
     file_bytes = await file.read()
     if len(file_bytes) > MAX_PDF_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="PDF exceeds maximum allowed size of 5 MB.")
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="PDF exceeds maximum allowed size of 5 MB."
+        )
 
     t0 = time.time()
     try:
         raw_text = PDFResumeParser.extract_text_from_bytes(file_bytes)
     except ValueError as ve:
-        raise HTTPException(status_code=422, detail=str(ve))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(ve))
 
     t1 = time.time()
     execution_trace.append({
@@ -313,8 +359,8 @@ async def upload_pdf_resume(
     extracted_skills = ai_audit.get("extracted_skills", ["Python", "Docker"])
     t1 = time.time()
     execution_trace.append({
-        "step": "Deep LLM Impact Audit & Skill Extraction",
-        "tool": "Groq LPU Engine",
+        "step": "Impact Audit & Skill Extraction",
+        "tool": ai_audit.get("evaluated_by", "ai_provider"),
         "duration_ms": round((t1 - t0) * 1000, 1),
         "status": "success",
         "output_summary": f"Quality Score: {ai_audit.get('quality_score')}/100"
@@ -350,7 +396,8 @@ async def upload_pdf_resume(
         "name": candidate_name,
         "skills": extracted_skills,
         "cgpa": extracted_cgpa,
-        "active_apps_count": 0
+        "active_apps_count": 0,
+        "data_mode": "LIVE_DATA"  # User-uploaded document is live user data
     }
     match_res = SemanticMatchingEngine.evaluate(candidate_obj, target_job)
     t1 = time.time()
@@ -386,7 +433,8 @@ async def upload_pdf_resume(
         "target_role": target_job_id,
         "skills": extracted_skills,
         "raw_resume": clean_text[:400],
-        "quality_score": ai_audit.get("quality_score", 75)
+        "quality_score": ai_audit.get("quality_score", 75),
+        "data_mode": "LIVE_DATA"
     }
     StudentRepository.upsert(new_student_record)
 
@@ -407,6 +455,7 @@ async def upload_pdf_resume(
             "milestone_completion": 10,
             "profile_quality": ai_audit.get("quality_score", 70)
         },
+        "data_mode": "LIVE_DATA",
         "execution_trace": execution_trace,
         "total_latency_ms": total_time_ms
     }
@@ -430,7 +479,8 @@ def process_resume(payload: ResumeParseRequest):
         "name": "Candidate",
         "skills": extracted_skills,
         "cgpa": 7.5,
-        "active_apps_count": 1
+        "active_apps_count": 1,
+        "data_mode": "LIVE_DATA"
     }
     match_res = SemanticMatchingEngine.evaluate(candidate_obj, target_job)
 
@@ -440,7 +490,8 @@ def process_resume(payload: ResumeParseRequest):
         "extracted_skills": extracted_skills,
         "quality_audit": ai_audit,
         "matching": match_res,
-        "market_radar": MarketRadarService.assess_risk(extracted_skills)
+        "market_radar": MarketRadarService.assess_risk(extracted_skills),
+        "data_mode": "LIVE_DATA"
     }
 
 
@@ -448,7 +499,7 @@ def process_resume(payload: ResumeParseRequest):
 def get_current_profile(student_id: str = "stud-01"):
     student = StudentRepository.get_by_id(student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student profile not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found.")
     return student
 
 
@@ -456,7 +507,7 @@ def get_current_profile(student_id: str = "stud-01"):
 def get_ats_preview(student_id: str):
     student = StudentRepository.get_by_id(student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found for ATS layout.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found for ATS layout.")
     return ResumeAuditorService.format_ats(student)
 
 
@@ -509,8 +560,21 @@ def ingest_external_url(payload: UrlIngestRequest):
             payload.url,
             timeout=5,
             stream=True,
+            allow_redirects=False,
             headers={"User-Agent": "CareerSync-Agent/2.4"}
         ) as resp:
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get("location")
+                if not location:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="External job listing returned an invalid redirect.",
+                    )
+                validate_public_url(location)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Redirected external job listings are not supported.",
+                )
             resp.raise_for_status()
             content_chunks = []
             bytes_read = 0
@@ -528,17 +592,13 @@ def ingest_external_url(payload: UrlIngestRequest):
         return {
             "status": "success",
             "url": payload.url,
-            "ai_parsed": ai_parsed
+            "ai_parsed": ai_parsed,
+            "data_mode": "LIVE_DATA"
         }
     except HTTPException:
         raise
-    except Exception as e:
-        return {
-            "status": "fallback",
-            "message": str(e),
-            "ai_parsed": {
-                "title": "Cloud & AI Systems Engineer",
-                "company": "External Listing",
-                "required_skills": ["Docker", "Kubernetes", "Vector Embeddings"]
-            }
-        }
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The external job listing could not be fetched.",
+        )

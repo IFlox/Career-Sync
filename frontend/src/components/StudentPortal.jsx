@@ -3,7 +3,7 @@ import {
   Upload, FileText, CheckCircle2, AlertTriangle, 
   ExternalLink, TrendingUp, Eye, Send, Check, User,
   Bookmark, BookmarkCheck, EyeOff, Sliders, Sparkles, Clock, BookOpen,
-  Compass, ArrowRight, Award
+  Compass, Award
 } from 'lucide-react';
 import { TARGET_JOBS, DEMO_PROFILES } from '../data/seedData';
 import { assessLayoffRisk, MARKET_SKILL_RADAR } from '../data/marketTaxonomy';
@@ -15,6 +15,7 @@ import MockInterview from './MockInterview';
 import ATSPreviewModal from './ATSPreviewModal';
 import PreferenceModal from './PreferenceModal';
 import ReadinessReportModal from './ReadinessReportModal';
+import RetryableErrorCard from './RetryableErrorCard';
 import { apiClient } from '../api/client';
 
 export default function StudentPortal({ addTrace, onExecutionUpdate }) {
@@ -35,39 +36,38 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
   const [feedbackRecords, setFeedbackRecords] = useState([]);
   const [dynamicRoadmap, setDynamicRoadmap] = useState([]);
   const [isLoadingRoadmap, setIsLoadingRoadmap] = useState(false);
+  const [roadmapError, setRoadmapError] = useState(null);
+  const [jobsError, setJobsError] = useState(null);
   const [nextAction, setNextAction] = useState(null);
+  const [profileDataError, setProfileDataError] = useState(null);
 
-  // Fetch initial preferences, feedback & ranked opportunities
+  const fetchRankedJobs = () => {
+    setJobsError(null);
+    apiClient.getRankedJobs(currentStudent.id)
+      .then(res => {
+        if (res.ranked_jobs && res.ranked_jobs.length > 0) {
+          setJobsList(res.ranked_jobs);
+          setSelectedJobId(res.ranked_jobs[0].id);
+        }
+      })
+      .catch((err) => {
+        setJobsError(err.message || "Failed to load personalized job ranking.");
+        setJobsList(TARGET_JOBS);
+      });
+  };
+
   useEffect(() => {
     let isMounted = true;
 
     apiClient.getPreferences(currentStudent.id)
       .then(data => { if (isMounted) setPreferences(data); })
-      .catch(() => {});
+      .catch((err) => setProfileDataError(err.message || "Failed to load career preferences."));
 
     apiClient.getFeedback(currentStudent.id)
       .then(res => { if (isMounted) setFeedbackRecords(res.feedback || []); })
-      .catch(() => {});
+      .catch((err) => setProfileDataError(err.message || "Failed to load recommendation feedback."));
 
-    apiClient.getRankedJobs(currentStudent.id)
-      .then(res => {
-        if (isMounted && res.ranked_jobs && res.ranked_jobs.length > 0) {
-          setJobsList(res.ranked_jobs);
-          setSelectedJobId(res.ranked_jobs[0].id);
-        }
-      })
-      .catch(() => {
-        apiClient.getLiveJobs()
-          .then(res => {
-            if (isMounted && res.jobs) {
-              setJobsList(res.jobs);
-              setSelectedJobId(res.jobs[0].id);
-            }
-          })
-          .catch(() => {
-            if (isMounted) setJobsList(TARGET_JOBS);
-          });
-      });
+    fetchRankedJobs();
 
     apiClient.getStudentProgress(currentStudent.id)
       .then(data => {
@@ -76,37 +76,36 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           setCompletedMilestones(data.completed_milestones || []);
         }
       })
-      .catch(() => {});
+      .catch((err) => setProfileDataError(err.message || "Failed to load saved progress."));
 
     return () => { isMounted = false; };
   }, [currentStudent.id]);
 
-  // Synchronize dynamic roadmap when role or preferences change
-  useEffect(() => {
-    let isMounted = true;
+  const fetchRoadmap = () => {
     setIsLoadingRoadmap(true);
+    setRoadmapError(null);
 
     apiClient.getRoadmap(currentStudent.id, selectedJobId)
       .then(res => {
-        if (isMounted && res.roadmap) {
+        if (res.roadmap) {
           setDynamicRoadmap(res.roadmap);
         }
       })
-      .catch(() => {
-        if (isMounted) setDynamicRoadmap([]);
+      .catch((err) => {
+        setRoadmapError(err.message || "Unable to generate personalized roadmap.");
+        setDynamicRoadmap([]);
       })
       .finally(() => {
-        if (isMounted) setIsLoadingRoadmap(false);
+        setIsLoadingRoadmap(false);
       });
 
-    // Phase 5: Fetch Next Best Action Recommendation
     apiClient.getNextAction(currentStudent.id, selectedJobId)
-      .then(action => {
-        if (isMounted) setNextAction(action);
-      })
-      .catch(() => {});
+      .then(action => setNextAction(action))
+      .catch((err) => setProfileDataError(err.message || "Failed to load the next recommended action."));
+  };
 
-    return () => { isMounted = false; };
+  useEffect(() => {
+    fetchRoadmap();
   }, [currentStudent.id, selectedJobId, preferences]);
 
   const selectedJob = jobsList.find(j => j.id === selectedJobId) || jobsList[0];
@@ -116,7 +115,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
   const reqSkillsCount = (selectedJob.requiredSkills || selectedJob.required_skills || []).length;
   const skillCoveragePct = Math.round((matchResult.matchedSkills.length / Math.max(1, reqSkillsCount)) * 100);
   const planCompletionPct = Math.round((completedMilestones.length / 4) * 100);
-  
+
   const overallReadiness = Math.round(
     (0.40 * skillCoveragePct) +
     (0.25 * interviewScore) +
@@ -148,7 +147,10 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         method: "POST",
         body: formData
       });
-      if (!response.ok) throw new Error("Upload processing error");
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || "Upload processing error");
+      }
       const data = await response.json();
 
       const newStudentObj = {
@@ -162,14 +164,16 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         skills: data.extracted_skills || [],
         rawResume: data.clean_resume || "",
         qualityScore: data.quality_audit?.quality_score || 80,
-        weakBullets: data.quality_audit?.weak_bullets || []
+        weakBullets: data.quality_audit?.weak_bullets || [],
+        data_mode: "LIVE_DATA"
       };
 
       setCurrentStudent(newStudentObj);
       onExecutionUpdate?.(data.execution_trace, data.total_latency_ms);
       addTrace?.(`Analyzed ${file.name} (CGPA: ${data.cgpa}). Saved to database.`);
     } catch (err) {
-      addTrace?.("Parsed using local rules.", 'info');
+      alert(`Resume upload failed: ${err.message}`);
+      addTrace?.(`Upload error: ${err.message}`, 'error');
     } finally {
       setIsUploading(false);
     }
@@ -181,16 +185,13 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
       setCompletedMilestones(res.completed_milestones);
       const updated = await apiClient.getStudentProgress(currentStudent.id);
       setServerProgress(updated);
-      addTrace?.(`Saved Week ${weekNum} task.`);
+      addTrace?.(`Updated Week ${weekNum} task.`);
 
-      // Refresh next best action dynamically
       apiClient.getNextAction(currentStudent.id, selectedJobId)
         .then(act => setNextAction(act))
         .catch(() => {});
-    } catch {
-      setCompletedMilestones(prev => 
-        prev.includes(weekNum) ? prev.filter(w => w !== weekNum) : [...prev, weekNum]
-      );
+    } catch (err) {
+      alert(`Could not save milestone: ${err.message}`);
     }
   };
 
@@ -204,8 +205,9 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
       addTrace?.(`Extracted skill criteria from job listing.`);
       alert(`Job analyzed! Extracted criteria: ${(data.ai_parsed?.required_skills || []).join(", ")}`);
       setUrlInput("");
-    } catch {
-      addTrace?.("Parsed using default template.");
+    } catch (err) {
+      alert(`URL ingestion failed: ${err.message}`);
+      addTrace?.(`URL ingest error: ${err.message}`, "error");
     } finally {
       setIsScrapingUrl(false);
     }
@@ -235,34 +237,39 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
   };
 
   const handleSavePreferences = async (newPrefs) => {
-    const res = await apiClient.updatePreferences(currentStudent.id, newPrefs);
-    setPreferences(res.preferences);
-    addTrace?.(`Saved preferences. Re-ranking job opportunities & regenerating roadmap...`);
-    
-    apiClient.getRankedJobs(currentStudent.id)
-      .then(r => {
-        if (r.ranked_jobs) setJobsList(r.ranked_jobs);
-      })
-      .catch(() => {});
+    try {
+      const res = await apiClient.updatePreferences(currentStudent.id, newPrefs);
+      setPreferences(res.preferences);
+      addTrace?.(`Saved preferences. Re-ranking job opportunities & regenerating roadmap...`);
+      fetchRankedJobs();
+    } catch (err) {
+      alert(`Could not save preferences: ${err.message}`);
+    }
   };
 
   const handleToggleSaveJob = async (jobId) => {
     const isSaved = matchResult.isSaved;
     const action = isSaved ? 'REJECTED' : 'SAVED';
 
-    await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, action);
-    addTrace?.(`${isSaved ? 'Removed bookmark from' : 'Bookmarked'} ${selectedJob.title}.`);
-
-    const res = await apiClient.getFeedback(currentStudent.id);
-    setFeedbackRecords(res.feedback || []);
+    try {
+      await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, action);
+      addTrace?.(`${isSaved ? 'Removed bookmark from' : 'Bookmarked'} ${selectedJob.title}.`);
+      const res = await apiClient.getFeedback(currentStudent.id);
+      setFeedbackRecords(res.feedback || []);
+    } catch (err) {
+      alert(`Could not update bookmark: ${err.message}`);
+    }
   };
 
   const handleHideJob = async (jobId) => {
-    await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, 'HIDDEN');
-    addTrace?.(`Moved ${selectedJob.title} to hidden list.`);
-
-    const res = await apiClient.getFeedback(currentStudent.id);
-    setFeedbackRecords(res.feedback || []);
+    try {
+      await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, 'HIDDEN');
+      addTrace?.(`Moved ${selectedJob.title} to hidden list.`);
+      const res = await apiClient.getFeedback(currentStudent.id);
+      setFeedbackRecords(res.feedback || []);
+    } catch (err) {
+      alert(`Could not hide role: ${err.message}`);
+    }
   };
 
   const hasApplied = appliedJobs.includes(selectedJob.id);
@@ -271,7 +278,14 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-      {/* Personalized Welcome Banner with Report Dossier Button */}
+      {profileDataError && (
+        <RetryableErrorCard
+          title="Some profile data could not be loaded"
+          message={profileDataError}
+          onRetry={() => window.location.reload()}
+        />
+      )}
+      {/* Header Banner */}
       <div className="bg-surface rounded-3xl p-6 sm:p-8 border border-[#E6E6E3] shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
         <div>
           <div className="flex items-center space-x-2 text-xs text-subtle mb-1">
@@ -287,7 +301,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           </p>
         </div>
 
-        {/* Profile Switcher, Preferences & Dossier Modal Buttons */}
+        {/* Controls */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="bg-canvas p-2 rounded-2.5xl border border-[#E2E2DE] flex items-center space-x-2">
             <User className="w-4 h-4 text-subtle ml-2" />
@@ -316,7 +330,6 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             <span>Preferences</span>
           </button>
 
-          {/* Phase 5: Export Official Placement Readiness Report */}
           <button
             onClick={() => setIsReportModalOpen(true)}
             className="px-4 py-2 rounded-2.5xl bg-obsidian text-white hover:bg-zinc-800 text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs"
@@ -327,7 +340,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         </div>
       </div>
 
-      {/* Phase 5: Closed-Loop Next Best Action Recommendation Banner */}
+      {/* Next Best Action Card */}
       {nextAction && (
         <div className="bg-gradient-to-r from-terracotta-50 to-amber-50/50 p-5 rounded-3xl border border-terracotta-200/70 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-start space-x-3">
@@ -336,7 +349,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             </div>
             <div>
               <span className="text-[10px] uppercase font-bold text-terracotta-700 tracking-wider block">
-                Agentic Recommendation • Next Best Step
+                Next Best Step • Agentic Recommendation
               </span>
               <h3 className="font-extrabold text-obsidian text-sm mt-0.5">{nextAction.headline}</h3>
               <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">{nextAction.description}</p>
@@ -344,7 +357,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           </div>
           <div className="flex items-center space-x-2 shrink-0">
             <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-3 py-1.5 rounded-full border border-emerald-200">
-              Target: ~{nextAction.projected_readiness}%
+              Projected: ~{nextAction.projected_readiness}%
             </span>
           </div>
         </div>
@@ -410,6 +423,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           <ConcentricReadinessDial readiness={readinessPayload} />
           <ProgressTimelineWidget progressData={serverProgress} />
 
+          {/* External Job Parser */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-3">
             <h4 className="font-bold text-obsidian text-sm">Analyze External Opportunity</h4>
             <p className="text-xs text-subtle">Paste an off-campus job link to match your current profile.</p>
@@ -476,148 +490,162 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
 
         {/* Right Wing (7 Cols) */}
         <div className="lg:col-span-7 space-y-6">
+          {/* Target Role Selector with Provenance Badges */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs text-subtle font-semibold">Active Placement Target:</span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                    selectedJob.is_live
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
-                  }`}>
-                    {selectedJob.source || "Campus Partner Drive"}
-                  </span>
-                </div>
-                <div className="flex items-center space-x-2 mt-1.5">
-                  <select
-                    value={selectedJobId}
-                    onChange={(e) => setSelectedJobId(e.target.value)}
-                    className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer max-w-md"
-                  >
-                    {jobsList.map(job => (
-                      <option key={job.id} value={job.id}>
-                        {job.title} — {job.company} ({job.composite_score ? `${job.composite_score}% Match` : job.tier})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-3">
-                <div className="flex items-center space-x-1">
-                  <button
-                    onClick={() => handleToggleSaveJob(selectedJob.id)}
-                    className={`p-2 rounded-xl border transition-all ${
-                      matchResult.isSaved
-                        ? 'bg-amber-50 text-amber-600 border-amber-300'
-                        : 'bg-canvas text-subtle hover:text-obsidian border-[#E0E0DC]'
-                    }`}
-                    title={matchResult.isSaved ? "Saved Role (Click to Unsave)" : "Bookmark Role"}
-                  >
-                    {matchResult.isSaved ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
-                  </button>
-                  <button
-                    onClick={() => handleHideJob(selectedJob.id)}
-                    className={`p-2 rounded-xl border transition-all ${
-                      matchResult.isHidden
-                        ? 'bg-rose-50 text-rose-600 border-rose-300'
-                        : 'bg-canvas text-subtle hover:text-rose-600 border-[#E0E0DC]'
-                    }`}
-                    title="Not Interested / Hide"
-                  >
-                    <EyeOff className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <div className="flex items-center space-x-3 bg-canvas px-4 py-2 rounded-2.5xl border border-[#E2E2DE]">
-                  <div className="w-11 h-11 rounded-full border-4 border-terracotta-500 flex items-center justify-center font-black text-obsidian text-xs">
-                    {matchResult.matchPercentage}%
-                  </div>
+            {jobsError ? (
+              <RetryableErrorCard
+                title="Could Not Load Opportunities"
+                message={jobsError}
+                onRetry={fetchRankedJobs}
+              />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <span className="text-[10px] font-bold text-subtle uppercase block">Role Fit</span>
-                    <span className="text-xs font-semibold text-obsidian">
-                      {matchResult.matchedSkills.length} of {reqSkillsCount} skills
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs text-subtle font-semibold">Active Placement Target:</span>
+                      {/* Sprint 3: Provenance Badge */}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        selectedJob.data_mode === "LIVE_DATA"
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                      }`}>
+                        {selectedJob.data_mode === "LIVE_DATA"
+                          ? `🟢 Live Public Opportunity (${selectedJob.source_label || "Arbeitnow"})`
+                          : `📋 Curated Institutional Sample`}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2 mt-1.5">
+                      <select
+                        value={selectedJobId}
+                        onChange={(e) => setSelectedJobId(e.target.value)}
+                        className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer max-w-md"
+                      >
+                        {jobsList.map((job, idx) => (
+                          <option key={`${job.id}-${idx}`} value={job.id}>
+                            {job.title} — {job.company} ({job.composite_score ? `${job.composite_score}% Match` : job.tier})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => handleToggleSaveJob(selectedJob.id)}
+                        className={`p-2 rounded-xl border transition-all ${
+                          matchResult.isSaved
+                            ? 'bg-amber-50 text-amber-600 border-amber-300'
+                            : 'bg-canvas text-subtle hover:text-obsidian border-[#E0E0DC]'
+                        }`}
+                        title={matchResult.isSaved ? "Saved Role (Click to Unsave)" : "Bookmark Role"}
+                      >
+                        {matchResult.isSaved ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+                      </button>
+                      <button
+                        onClick={() => handleHideJob(selectedJob.id)}
+                        className={`p-2 rounded-xl border transition-all ${
+                          matchResult.isHidden
+                            ? 'bg-rose-50 text-rose-600 border-rose-300'
+                            : 'bg-canvas text-subtle hover:text-rose-600 border-[#E0E0DC]'
+                        }`}
+                        title="Not Interested / Hide"
+                      >
+                        <EyeOff className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center space-x-3 bg-canvas px-4 py-2 rounded-2.5xl border border-[#E2E2DE]">
+                      <div className="w-11 h-11 rounded-full border-4 border-terracotta-500 flex items-center justify-center font-black text-obsidian text-xs">
+                        {matchResult.matchPercentage}%
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-subtle uppercase block">Role Fit</span>
+                        <span className="text-xs font-semibold text-obsidian">
+                          {matchResult.matchedSkills.length} of {reqSkillsCount} skills
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {matchResult.sopViolations.length > 0 && (
-              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
-                <div className="flex items-center space-x-1.5 font-bold">
-                  <AlertTriangle className="w-4 h-4 text-rose-600" />
-                  <span>University Placement Policy Notice</span>
-                </div>
-                {matchResult.sopViolations.map((v, i) => (
-                  <p key={i} className="text-[11px] text-rose-800">• {v}</p>
-                ))}
-              </div>
-            )}
-
-            <div className="p-4 rounded-2.5xl bg-canvas border border-[#E2E2DE] space-y-2.5">
-              <div className="flex items-center space-x-1.5 text-xs font-bold text-obsidian">
-                <Sparkles className="w-3.5 h-3.5 text-terracotta-500" />
-                <span>Why This Role Fits Your Profile:</span>
-              </div>
-              <ul className="space-y-1 text-[11px] text-zinc-700">
-                {matchResult.fitReasons.map((reason, idx) => (
-                  <li key={idx} className="flex items-start space-x-1.5">
-                    <span className="text-emerald-600 font-bold">✓</span>
-                    <span>{reason}</span>
-                  </li>
-                ))}
-                {matchResult.cautionNotes.map((note, idx) => (
-                  <li key={idx} className="flex items-start space-x-1.5 text-amber-800">
-                    <span className="text-amber-500 font-bold">△</span>
-                    <span>{note}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="flex flex-wrap gap-2 pt-1">
-              {matchResult.matchedSkills.map((sk, idx) => (
-                <span key={idx} className="text-xs bg-emerald-50 text-emerald-800 font-semibold px-3 py-1 rounded-full border border-emerald-200">
-                  ✓ {sk}
-                </span>
-              ))}
-              {matchResult.missingSkills.map((sk, idx) => (
-                <span key={idx} className="text-xs bg-terracotta-50 text-terracotta-600 font-semibold px-3 py-1 rounded-full border border-terracotta-100">
-                  △ Recommended: {sk}
-                </span>
-              ))}
-            </div>
-
-            <div className="pt-2 border-t border-[#ECECE9] flex items-center justify-between">
-              <span className="text-xs text-subtle">
-                Active Drives: <strong>{currentStudent.activeAppsCount} / 3</strong> enrolled
-              </span>
-              <button
-                onClick={handleApplyToJob}
-                disabled={hasApplied || isCgpaBlocked || isCapBlocked}
-                className={`px-5 py-2 rounded-full text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs ${
-                  hasApplied
-                    ? 'bg-emerald-600 text-white cursor-default'
-                    : isCgpaBlocked || isCapBlocked
-                    ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
-                    : 'bg-terracotta-500 text-white hover:bg-terracotta-600'
-                }`}
-              >
-                {hasApplied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Application Submitted</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5" />
-                    <span>{isCapBlocked ? "Application Limit (3) Reached" : isCgpaBlocked ? "Restricted by CGPA" : "Enroll for Campus Drive"}</span>
-                  </>
+                {matchResult.sopViolations.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
+                    <div className="flex items-center space-x-1.5 font-bold">
+                      <AlertTriangle className="w-4 h-4 text-rose-600" />
+                      <span>University Placement Policy Notice</span>
+                    </div>
+                    {matchResult.sopViolations.map((v, i) => (
+                      <p key={i} className="text-[11px] text-rose-800">• {v}</p>
+                    ))}
+                  </div>
                 )}
-              </button>
-            </div>
+
+                <div className="p-4 rounded-2.5xl bg-canvas border border-[#E2E2DE] space-y-2.5">
+                  <div className="flex items-center space-x-1.5 text-xs font-bold text-obsidian">
+                    <Sparkles className="w-3.5 h-3.5 text-terracotta-500" />
+                    <span>Why This Role Fits Your Profile:</span>
+                  </div>
+                  <ul className="space-y-1 text-[11px] text-zinc-700">
+                    {matchResult.fitReasons.map((reason, idx) => (
+                      <li key={idx} className="flex items-start space-x-1.5">
+                        <span className="text-emerald-600 font-bold">✓</span>
+                        <span>{reason}</span>
+                      </li>
+                    ))}
+                    {matchResult.cautionNotes.map((note, idx) => (
+                      <li key={idx} className="flex items-start space-x-1.5 text-amber-800">
+                        <span className="text-amber-500 font-bold">△</span>
+                        <span>{note}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {matchResult.matchedSkills.map((sk, idx) => (
+                    <span key={idx} className="text-xs bg-emerald-50 text-emerald-800 font-semibold px-3 py-1 rounded-full border border-emerald-200">
+                      ✓ {sk}
+                    </span>
+                  ))}
+                  {matchResult.missingSkills.map((sk, idx) => (
+                    <span key={idx} className="text-xs bg-terracotta-50 text-terracotta-600 font-semibold px-3 py-1 rounded-full border border-terracotta-100">
+                      △ Recommended: {sk}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="pt-2 border-t border-[#ECECE9] flex items-center justify-between">
+                  <span className="text-xs text-subtle">
+                    Active Drives: <strong>{currentStudent.activeAppsCount} / 3</strong> enrolled
+                  </span>
+                  <button
+                    onClick={handleApplyToJob}
+                    disabled={hasApplied || isCgpaBlocked || isCapBlocked}
+                    className={`px-5 py-2 rounded-full text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs ${
+                      hasApplied
+                        ? 'bg-emerald-600 text-white cursor-default'
+                        : isCgpaBlocked || isCapBlocked
+                        ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
+                        : 'bg-terracotta-500 text-white hover:bg-terracotta-600'
+                    }`}
+                  >
+                    {hasApplied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Application Submitted</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{isCapBlocked ? "Application Limit (3) Reached" : isCgpaBlocked ? "Restricted by CGPA" : "Enroll for Campus Drive"}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
 
           <SkillRadarChart
@@ -626,7 +654,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             targetRole={selectedJob.title}
           />
 
-          {/* Dynamic 4-Week Roadmap */}
+          {/* Dynamic 4-Week Roadmap with Retryable Error Card */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -643,7 +671,14 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               </span>
             </div>
 
-            {isLoadingRoadmap ? (
+            {roadmapError ? (
+              <RetryableErrorCard
+                title="Could Not Generate Roadmap"
+                message={roadmapError}
+                onRetry={fetchRoadmap}
+                isRetrying={isLoadingRoadmap}
+              />
+            ) : isLoadingRoadmap ? (
               <div className="p-8 text-center text-xs text-subtle">Personalizing roadmap modules...</div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -720,7 +755,6 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         />
       )}
 
-      {/* Phase 5: Official Placement Readiness Dossier Modal */}
       {isReportModalOpen && (
         <ReadinessReportModal
           student={currentStudent}

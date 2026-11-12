@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Mic, MicOff, Send, Volume2, ChevronRight, RefreshCw, Briefcase } from 'lucide-react';
+import { Mic, MicOff, Send, Volume2, ChevronRight, RefreshCw, Briefcase, AlertCircle } from 'lucide-react';
 import { apiClient } from '../api/client';
+import RetryableErrorCard from './RetryableErrorCard';
 
 export default function MockInterview({
   studentId = "stud-01",
@@ -21,42 +22,39 @@ export default function MockInterview({
   const [isRecording, setIsRecording] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState(false);
+  const [questionError, setQuestionError] = useState(null);
+  const [evaluationError, setEvaluationError] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [sessionScores, setSessionScores] = useState([]);
   const [audioWaves, setAudioWaves] = useState([20, 25, 20, 30, 20, 25, 20, 30, 20, 25]);
 
-  // Sync skill dropdown whenever target role or missingSkills change
   useEffect(() => {
     if (missingSkills && missingSkills.length > 0) {
       if (!missingSkills.includes(currentSkill)) {
         setCurrentSkill(missingSkills[0]);
         setFeedback(null);
+        setEvaluationError(null);
       }
     }
   }, [missingSkills]);
 
-  // Fetch question from backend whenever skill or difficulty adapts
-  useEffect(() => {
-    let isMounted = true;
+  const loadQuestion = () => {
     setIsLoadingQuestion(true);
+    setQuestionError(null);
     apiClient.getInterviewQuestion(currentSkill, difficulty)
       .then(q => {
-        if (isMounted && q) setCurrentQuestion(q);
+        if (q) setCurrentQuestion(q);
       })
-      .catch(() => {
-        if (isMounted) {
-          setCurrentQuestion({
-            question: `Explain the fundamental architecture and production challenges of ${currentSkill}.`,
-            level: difficulty >= 8 ? "Advanced" : difficulty <= 4 ? "Foundational" : "Intermediate",
-            keywords: ["scalability", "architecture", "trade-offs"]
-          });
-        }
+      .catch((err) => {
+        setQuestionError(err.message || "Failed to load question for this topic.");
       })
       .finally(() => {
-        if (isMounted) setIsLoadingQuestion(false);
+        setIsLoadingQuestion(false);
       });
+  };
 
-    return () => { isMounted = false; };
+  useEffect(() => {
+    loadQuestion();
   }, [currentSkill, difficulty]);
 
   useEffect(() => {
@@ -74,7 +72,7 @@ export default function MockInterview({
   const toggleSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Browser speech recognition is not supported in this browser. Please type your response.");
+      alert("Browser speech recognition is not supported in this browser. Please type your answer.");
       return;
     }
 
@@ -115,7 +113,8 @@ export default function MockInterview({
   const handleSubmit = async () => {
     if (!answer.trim()) return;
     setIsEvaluating(true);
-    addTrace?.(`Interview answer for ${currentSkill} (${targetRoleTitle}, Diff: ${difficulty}/10)...`);
+    setEvaluationError(null);
+    addTrace?.(`Evaluating answer for ${currentSkill} (${targetRoleTitle}, Diff: ${difficulty}/10)...`);
 
     try {
       const res = await apiClient.submitInterviewAnswer(
@@ -135,10 +134,11 @@ export default function MockInterview({
       const avg = Math.round((newScores.reduce((a, b) => a + b, 0) / newScores.length) * 10);
       onScoreUpdate?.(avg);
 
-      addTrace?.(`Interview score: ${res.score}/10 [${res.evaluated_by}]. Next difficulty: ${nextDiff}/10.`);
+      addTrace?.(`Interview evaluated: ${res.score}/10 [${res.evaluated_by}]. Next difficulty: ${nextDiff}/10.`);
     } catch (err) {
-      alert(`Evaluation failed: ${err.message}`);
-      addTrace?.(`Evaluation error: ${err.message}`, "error");
+      // Sprint 3: Display honest, actionable error state without faking scores
+      setEvaluationError(err.message || "We could not evaluate this response. No score was recorded.");
+      addTrace?.(`Evaluation service error: ${err.message}`, "error");
     } finally {
       setIsEvaluating(false);
     }
@@ -146,6 +146,7 @@ export default function MockInterview({
 
   const handleNext = () => {
     setFeedback(null);
+    setEvaluationError(null);
     setAnswer("");
     setQuestionCount(prev => prev + 1);
   };
@@ -173,6 +174,7 @@ export default function MockInterview({
               onChange={(e) => {
                 setCurrentSkill(e.target.value);
                 setFeedback(null);
+                setEvaluationError(null);
               }}
               className="bg-transparent text-xs font-bold text-obsidian focus:outline-none cursor-pointer"
             >
@@ -187,26 +189,35 @@ export default function MockInterview({
         </div>
       </div>
 
-      {/* Dynamic Question Card */}
-      <div className="bg-canvas p-5 rounded-2.5xl border border-[#E2E2DE] space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-extrabold uppercase tracking-wider text-terracotta-600 bg-terracotta-50 px-2.5 py-0.5 rounded-full border border-terracotta-100">
-            Question #{questionCount} • {currentQuestion.level || "Adaptive"}
-          </span>
-          <button
-            onClick={handleSpeakQuestion}
-            className="flex items-center space-x-1.5 text-xs text-subtle hover:text-obsidian transition-colors font-medium"
-          >
-            <Volume2 className="w-4 h-4 text-terracotta-500" />
-            <span>Read Aloud</span>
-          </button>
+      {/* Dynamic Question Card or Error State */}
+      {questionError ? (
+        <RetryableErrorCard
+          title="Could Not Load Adaptive Question"
+          message={questionError}
+          onRetry={loadQuestion}
+          isRetrying={isLoadingQuestion}
+        />
+      ) : (
+        <div className="bg-canvas p-5 rounded-2.5xl border border-[#E2E2DE] space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-terracotta-600 bg-terracotta-50 px-2.5 py-0.5 rounded-full border border-terracotta-100">
+              Question #{questionCount} • {currentQuestion.level || "Adaptive"}
+            </span>
+            <button
+              onClick={handleSpeakQuestion}
+              className="flex items-center space-x-1.5 text-xs text-subtle hover:text-obsidian transition-colors font-medium"
+            >
+              <Volume2 className="w-4 h-4 text-terracotta-500" />
+              <span>Read Aloud</span>
+            </button>
+          </div>
+          <p className="text-sm sm:text-base font-bold text-obsidian leading-relaxed">
+            {isLoadingQuestion ? "Loading next adaptive question..." : `"${currentQuestion.question}"`}
+          </p>
         </div>
-        <p className="text-sm sm:text-base font-bold text-obsidian leading-relaxed">
-          {isLoadingQuestion ? "Loading adaptive question..." : `"${currentQuestion.question}"`}
-        </p>
-      </div>
+      )}
 
-      {/* Speech Input & Waveform */}
+      {/* Speech Input & Waveform Area */}
       <div className="space-y-4">
         <div className="h-12 bg-canvas rounded-2xl border border-[#E0E0DC] flex items-center justify-center space-x-1.5 px-4">
           {audioWaves.map((h, i) => (
@@ -257,7 +268,17 @@ export default function MockInterview({
         </div>
       </div>
 
-      {/* Evaluation Feedback */}
+      {/* Honest Error State on Evaluation Failure */}
+      {evaluationError && (
+        <RetryableErrorCard
+          title="Evaluation Service Notice"
+          message={evaluationError}
+          onRetry={handleSubmit}
+          isRetrying={isEvaluating}
+        />
+      )}
+
+      {/* Verified Grounded Feedback */}
       {feedback && (
         <div className="p-5 rounded-2.5xl bg-surface border border-terracotta-200 shadow-md space-y-4">
           <div className="flex items-center justify-between">
@@ -268,7 +289,7 @@ export default function MockInterview({
               <div>
                 <span className="font-extrabold text-obsidian text-sm block">Score: {feedback.score} / 10</span>
                 <span className="text-[10px] text-subtle font-mono">
-                  Grounded: {feedback.evaluated_by === "ai" ? "Gemini/Groq LLM" : "Deterministic Lexical Rubric"}
+                  Engine: {feedback.evaluated_by === "ai_provider" ? "AI Evaluation Provider" : "Deterministic Lexical Rubric"}
                 </span>
               </div>
             </div>

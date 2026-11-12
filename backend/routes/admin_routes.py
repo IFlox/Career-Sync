@@ -1,37 +1,27 @@
 """
-CareerSync Placement Cell (TPO) Admin Routes (Phase 4 Edition)
-Features:
-1. Intent Analytics (Batch preferred roles, locations, and demand mismatch)
-2. 1-Click AI Cohort Remediation Workshop Syllabus Generator
-3. Verification Matrix with Student Career Preferences
-4. Recruiter CSV Export with Preferences & Top Verified Skills
+CareerSync Placement Cell (TPO) Admin Routes (Sprint 1 Complete)
+Standardized error codes: 401 Unauthorized, 403 Forbidden, 404 Not Found, 422 Unprocessable Entity.
 """
 
 import os
 import io
 import csv
-import json
-import jwt
-from datetime import datetime, timedelta
-from typing import Literal, Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Header
+from typing import Literal, Optional, List
+from fastapi import APIRouter, HTTPException, Depends, Header, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from database import StudentRepository, PreferenceRepository
-from services.ai_engine import CareerSyncAIEngine
+from services.ai_engine import CareerSyncAIEngine, AIProviderUnavailableError
+from services.admin_auth import ADMIN_PIN, create_admin_token, require_admin_configuration, verify_tpo_token
 
 load_dotenv()
 
 router = APIRouter(prefix="/admin", tags=["Placement Cell (TPO)"])
 
-SECRET_KEY = os.getenv("SECRET_KEY", "careersync_secure_hmac_sha256_secret_key_minimum_32_bytes_2026")
-ADMIN_PIN = os.getenv("ADMIN_PIN", "tpo_secure_2026")
-JWT_ALGORITHM = "HS256"
-
 class LoginRequest(BaseModel):
-    pin: str
+    pin: str = Field(..., min_length=1)
 
 class StatusUpdateRequest(BaseModel):
     student_id: str
@@ -41,51 +31,18 @@ class RemediationSyllabusRequest(BaseModel):
     target_skills: List[str] = ["Docker & Containerization", "System Design", "RAG Pipelines"]
 
 
-def create_admin_token() -> str:
-    payload = {
-        "sub": "tpo_admin",
-        "role": "ADMIN",
-        "exp": datetime.utcnow() + timedelta(hours=12)
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-
-def verify_tpo_token(
-    authorization: Optional[str] = Header(None),
-    x_admin_token: Optional[str] = Header(None),
-    x_admin_pin: Optional[str] = Header(None)
-):
-    token = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
-    elif x_admin_token:
-        token = x_admin_token
-
-    if token:
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
-            if payload.get("role") == "ADMIN":
-                return True
-        except jwt.PyJWTError:
-            raise HTTPException(status_code=401, detail="Invalid or expired admin session token.")
-
-    if x_admin_pin and x_admin_pin == ADMIN_PIN:
-        return True
-
-    raise HTTPException(status_code=401, detail="Unauthorized: Valid admin authentication required.")
-
-
 @router.post("/auth/verify")
 def verify_admin_pin(payload: LoginRequest):
+    require_admin_configuration()
     if payload.pin == ADMIN_PIN:
         token = create_admin_token()
         return {"status": "authorized", "token": token, "token_type": "bearer"}
-    raise HTTPException(status_code=401, detail="Incorrect admin password.")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect admin access key."
+    )
 
 
-# =====================================================================
-# Phase 4: Cohort Intent Analytics Endpoint
-# =====================================================================
 @router.get("/analytics/intent")
 def get_cohort_intent_analytics(authorized: bool = Depends(verify_tpo_token)):
     students = StudentRepository.get_all()
@@ -93,7 +50,6 @@ def get_cohort_intent_analytics(authorized: bool = Depends(verify_tpo_token)):
 
     role_counts = {}
     loc_counts = {}
-    industry_counts = {}
 
     for s in students:
         pref = PreferenceRepository.get_preferences(s["id"])
@@ -101,8 +57,6 @@ def get_cohort_intent_analytics(authorized: bool = Depends(verify_tpo_token)):
             role_counts[r] = role_counts.get(r, 0) + 1
         for l in pref.get("preferred_locations", []):
             loc_counts[l] = loc_counts.get(l, 0) + 1
-        for ind in pref.get("preferred_industries", []):
-            industry_counts[ind] = industry_counts.get(ind, 0) + 1
 
     top_roles = [
         {"role": k, "student_count": v, "percentage": round((v / max(1, total)) * 100)}
@@ -123,18 +77,10 @@ def get_cohort_intent_analytics(authorized: bool = Depends(verify_tpo_token)):
         "top_desired_locations": top_locations or [
             {"location": "Bangalore", "student_count": 3, "percentage": 100},
             {"location": "Remote", "student_count": 2, "percentage": 67}
-        ],
-        "demand_supply_insights": [
-            "High student preference for AI Systems (67%), matching emerging enterprise recruiter drives.",
-            "Backend Developer openings match 50% of the active student demand.",
-            "100% of students expressed openness to Bangalore or Remote opportunities."
         ]
     }
 
 
-# =====================================================================
-# Phase 4: 1-Click AI Remediation Workshop Generator Endpoint
-# =====================================================================
 @router.post("/remediation/syllabus")
 def generate_remediation_syllabus(payload: RemediationSyllabusRequest, authorized: bool = Depends(verify_tpo_token)):
     skills_str = ", ".join(payload.target_skills)
@@ -160,9 +106,12 @@ def generate_remediation_syllabus(payload: RemediationSyllabusRequest, authorize
         "}"
     )
 
-    ai_syllabus = CareerSyncAIEngine._call_llm_json(prompt)
-    if ai_syllabus and isinstance(ai_syllabus.get("days"), list):
-        return ai_syllabus
+    try:
+        ai_syllabus = CareerSyncAIEngine._call_llm_json(prompt)
+        if isinstance(ai_syllabus.get("days"), list):
+            return ai_syllabus
+    except AIProviderUnavailableError:
+        pass
 
     # Verified deterministic fallback curriculum (Grounded)
     return {
@@ -196,9 +145,6 @@ def generate_remediation_syllabus(payload: RemediationSyllabusRequest, authorize
     }
 
 
-# =====================================================================
-# Matrix, Status Mutation & CSV Export
-# =====================================================================
 @router.get("/analytics/overview")
 def get_cohort_overview(authorized: bool = Depends(verify_tpo_token)):
     students = StudentRepository.get_all()
@@ -240,7 +186,10 @@ def get_verification_matrix(authorized: bool = Depends(verify_tpo_token)):
 def update_student_status(payload: StatusUpdateRequest, authorized: bool = Depends(verify_tpo_token)):
     student = StudentRepository.get_by_id(payload.student_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student ID not found in database.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student ID not found in database."
+        )
 
     StudentRepository.update_status(payload.student_id, payload.new_status)
     return {

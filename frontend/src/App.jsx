@@ -8,6 +8,7 @@ import { apiClient } from './api/client';
 
 export default function App() {
   const [activePortal, setActivePortal] = useState('student');
+  const [isResettingWorkspace, setIsResettingWorkspace] = useState(false);
   
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => {
     try {
@@ -26,8 +27,8 @@ export default function App() {
 
   const [executionSteps, setExecutionSteps] = useState([
     { step: "System Initialized", duration_ms: 12.4, status: "success", output_summary: "Ready for student sessions" },
-    { step: "Data Privacy Protocol", duration_ms: 2.1, status: "success", output_summary: "Contact information masked" },
-    { step: "Institutional Rules Loaded", duration_ms: 1.8, status: "success", output_summary: "Campus drive guidelines active" }
+    { step: "Privacy Protection Active", duration_ms: 2.1, status: "success", output_summary: "Personal details hidden" },
+    { step: "College Rules Loaded", duration_ms: 1.8, status: "success", output_summary: "Eligibility rules ready" }
   ]);
   const [totalLatency, setTotalLatency] = useState(16.3);
 
@@ -43,7 +44,7 @@ export default function App() {
         step: message,
         duration_ms: Math.floor(Math.random() * 35) + 12,
         status: type === 'error' ? 'error' : 'success',
-        output_summary: `Recorded at ${timeStr}`
+        output_summary: `Time: ${timeStr}`
       },
       ...prev
     ]);
@@ -60,9 +61,9 @@ export default function App() {
       setActivePortal('admin');
       setAuthError("");
       setAdminPin("");
-      addTrace("Placement officer authenticated.");
+      addTrace("Admin authenticated via secure session.");
     } catch (err) {
-      setAuthError(err.message || "Invalid credentials. Please contact administration.");
+      setAuthError(err.message || "Incorrect password. Access denied.");
     }
   };
 
@@ -74,7 +75,27 @@ export default function App() {
     }
     setIsAdminLoggedIn(false);
     setActivePortal('student');
-    addTrace("Officer session ended.");
+    addTrace("Admin session cleared. Logged out.");
+  };
+
+  // Sprint 3: Reset Workspace Handler
+  const handleResetWorkspace = async () => {
+    if (!window.confirm("Reset demo workspace? This will purge uploaded resumes and restore Priya, Rahul, and Amit to baseline states.")) {
+      return;
+    }
+
+    setIsResettingWorkspace(true);
+    addTrace?.("Resetting demo workspace to baseline seed state...");
+
+    try {
+      await apiClient.resetWorkspace();
+      addTrace?.("Demo workspace successfully reset.");
+      window.location.reload();
+    } catch (err) {
+      alert(`Reset failed: ${err.message}`);
+    } finally {
+      setIsResettingWorkspace(false);
+    }
   };
 
   return (
@@ -85,6 +106,8 @@ export default function App() {
         setIsAdminAuthModalOpen={setIsAdminAuthModalOpen}
         isAdminLoggedIn={isAdminLoggedIn}
         onAdminLogout={handleAdminLogout}
+        onResetWorkspace={handleResetWorkspace}
+        isResettingWorkspace={isResettingWorkspace}
         traceCount={executionSteps.length}
       />
 
@@ -104,7 +127,7 @@ export default function App() {
         totalLatency={totalLatency}
       />
 
-      {/* Discreet Officer Login Modal */}
+      {/* Admin Login Modal */}
       {isAdminAuthModalOpen && (
         <div className="fixed inset-0 z-50 bg-obsidian/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-surface rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-[#E0E0DC] space-y-4">
@@ -124,8 +147,8 @@ export default function App() {
             </div>
 
             <div>
-              <h3 className="font-bold text-obsidian text-base">Placement Officer Sign In</h3>
-              <p className="text-xs text-subtle mt-0.5">Enter institutional access key.</p>
+              <h3 className="font-bold text-obsidian text-base">Admin Login</h3>
+              <p className="text-xs text-subtle mt-0.5">Enter password to access admin dashboard.</p>
             </div>
 
             <form onSubmit={handleAdminLogin} className="space-y-3">
@@ -133,7 +156,7 @@ export default function App() {
                 type="password"
                 value={adminPin}
                 onChange={(e) => setAdminPin(e.target.value)}
-                placeholder="Enter access code"
+                placeholder="Enter admin password"
                 className="w-full text-xs px-3.5 py-2.5 rounded-xl bg-canvas border border-[#E0E0DC] text-obsidian focus:outline-none focus:ring-1 focus:ring-obsidian"
                 autoFocus
               />
@@ -146,7 +169,7 @@ export default function App() {
                 type="submit"
                 className="w-full py-2.5 rounded-xl bg-obsidian text-white font-bold text-xs hover:bg-zinc-800 transition-colors"
               >
-                Authenticate
+                Sign In to Admin
               </button>
             </form>
           </div>

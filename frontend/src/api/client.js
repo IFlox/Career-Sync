@@ -23,17 +23,36 @@ export const apiClient = {
     return headers;
   },
 
-  // Phase 5: Closed-Loop Next Best Action API
+  // Reset Demo Workspace (Sprint 3)
+  async resetWorkspace() {
+    const res = await fetch(`${API_BASE}/students/workspace/reset`, {
+      method: 'POST',
+      headers: this.getAdminHeaders()
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to reset demo workspace.');
+    }
+    return res.json();
+  },
+
+  // Next Best Action
   async getNextAction(studentId, jobId = "job-ai-sys") {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/recommendations/next-action?job_id=${encodeURIComponent(jobId)}`);
-    if (!res.ok) throw new Error('Failed to load next action recommendation.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load recommendation action.');
+    }
     return res.json();
   },
 
   // Student Preferences & Feedback
   async getPreferences(studentId) {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/preferences`);
-    if (!res.ok) throw new Error('Failed to load career preferences.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load career preferences.');
+    }
     return res.json();
   },
 
@@ -43,7 +62,10 @@ export const apiClient = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(prefData),
     });
-    if (!res.ok) throw new Error('Failed to save career preferences.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to save career preferences.');
+    }
     return res.json();
   },
 
@@ -59,31 +81,46 @@ export const apiClient = {
         reason: reason
       })
     });
-    if (!res.ok) throw new Error('Failed to record feedback.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to record feedback.');
+    }
     return res.json();
   },
 
   async getFeedback(studentId) {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/feedback`);
-    if (!res.ok) throw new Error('Failed to load student feedback.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load student feedback.');
+    }
     return res.json();
   },
 
   async getRankedJobs(studentId) {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/ranked-jobs`);
-    if (!res.ok) throw new Error('Failed to load personalized job rankings.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load personalized job rankings.');
+    }
     return res.json();
   },
 
   async getLiveJobs() {
     const res = await fetch(`${API_BASE}/students/jobs/live`);
-    if (!res.ok) throw new Error('Failed to load job listings.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load live job feed.');
+    }
     return res.json();
   },
 
   async getUniversityPolicy() {
     const res = await fetch(`${API_BASE}/students/policy`);
-    if (!res.ok) throw new Error('Failed to fetch university policy.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to fetch university policy.');
+    }
     return res.json();
   },
 
@@ -115,13 +152,19 @@ export const apiClient = {
 
   async getATSPreview(studentId) {
     const res = await fetch(`${API_BASE}/students/ats-preview/${encodeURIComponent(studentId)}`);
-    if (!res.ok) throw new Error('Failed to fetch ATS layout preview.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to fetch ATS layout preview.');
+    }
     return res.json();
   },
 
   async getStudentProgress(studentId) {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/progress`);
-    if (!res.ok) throw new Error('Failed to fetch student progress timeline.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to fetch student progress timeline.');
+    }
     return res.json();
   },
 
@@ -134,19 +177,28 @@ export const apiClient = {
         current_readiness: currentReadiness
       })
     });
-    if (!res.ok) throw new Error('Failed to toggle milestone state.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to update milestone state.');
+    }
     return res.json();
   },
 
   async getRoadmap(studentId, jobId = "job-ai-sys") {
     const res = await fetch(`${API_BASE}/students/roadmap/${encodeURIComponent(studentId)}?job_id=${encodeURIComponent(jobId)}`);
-    if (!res.ok) throw new Error('Failed to generate personalized upskilling roadmap.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to generate preparation roadmap.');
+    }
     return res.json();
   },
 
   async getInterviewQuestion(skill = 'RAG Pipelines', difficulty = 6) {
     const res = await fetch(`${API_BASE}/students/interview/question?skill=${encodeURIComponent(skill)}&difficulty=${difficulty}`);
-    if (!res.ok) throw new Error('Failed to fetch interview question.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to fetch adaptive interview question.');
+    }
     return res.json();
   },
 
@@ -162,7 +214,10 @@ export const apiClient = {
         current_difficulty: currentDifficulty,
       }),
     });
-    if (!res.ok) throw new Error('Failed to evaluate technical answer.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'We could not evaluate this response. No score was recorded.');
+    }
     return res.json();
   },
 
@@ -174,7 +229,7 @@ export const apiClient = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to ingest external URL.');
+      throw new Error(err.detail || 'Failed to ingest external job post URL.');
     }
     return res.json();
   },
@@ -201,7 +256,10 @@ export const apiClient = {
     const res = await fetch(`${API_BASE}/admin/matrix`, {
       headers: this.getAdminHeaders(),
     });
-    if (!res.ok) throw new Error('Unauthorized access to admin matrix.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Unauthorized access to admin matrix.');
+    }
     return res.json();
   },
 
@@ -209,7 +267,10 @@ export const apiClient = {
     const res = await fetch(`${API_BASE}/admin/analytics/intent`, {
       headers: this.getAdminHeaders(),
     });
-    if (!res.ok) throw new Error('Failed to load student intent analytics.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load student intent analytics.');
+    }
     return res.json();
   },
 
@@ -219,7 +280,10 @@ export const apiClient = {
       headers: this.getAdminHeaders(),
       body: JSON.stringify({ target_skills: skills })
     });
-    if (!res.ok) throw new Error('Failed to generate remediation syllabus.');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to generate remediation syllabus.');
+    }
     return res.json();
   },
 

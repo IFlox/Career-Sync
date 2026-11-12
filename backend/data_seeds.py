@@ -1,9 +1,6 @@
 """
-CareerSync Multi-Style Learning Catalog & Seed Datasets
-Provides verified resources across 3 student learning styles:
-- PROJECT_BASED: Hands-on mini-systems and labs
-- VIDEO_LECTURES: NPTEL, Coursera, DeepLearning.AI
-- DOCS_READING: Official developer documentation
+CareerSync Static Seed Catalog & Provenance Registry (Sprint 2)
+Internally tags all baseline institutional records with data_mode: "DEMO_DATA".
 """
 
 TARGET_JOBS = [
@@ -11,41 +8,61 @@ TARGET_JOBS = [
         "id": "job-ai-sys",
         "title": "AI Systems & RAG Engineer",
         "company": "Anthropic / Enterprise Labs",
+        "location": "Bangalore / Remote",
         "tier": "Tier-1",
         "min_cgpa": 7.5,
         "required_skills": ["Python", "PyTorch", "Vector Embeddings", "RAG Pipelines", "FastAPI", "Docker", "System Design"],
-        "description": "Architect production agentic workflows, low-latency vector retrieval engines, and fine-tune open models."
+        "description": "Architect production agentic workflows, low-latency vector retrieval engines, and fine-tune open models.",
+        "data_mode": "DEMO_DATA",
+        "source_label": "Campus Partner Drive",
+        "is_live": False,
+        "updated_at": "Curated Institutional Role"
     },
     {
         "id": "job-cloud-devops",
         "title": "Cloud Infrastructure & DevOps Architect",
         "company": "Synthetix Cloud Systems",
+        "location": "Pune / Hybrid",
         "tier": "Tier-1",
         "min_cgpa": 6.5,
         "required_skills": ["Kubernetes", "Docker", "Terraform", "CI/CD", "AWS", "Linux", "Go"],
-        "description": "Manage zero-downtime distributed microservices and automate IaaC provisioning."
+        "description": "Manage zero-downtime distributed microservices, automate IaaC provisioning, and configure observability meshes.",
+        "data_mode": "DEMO_DATA",
+        "source_label": "Campus Partner Drive",
+        "is_live": False,
+        "updated_at": "Curated Institutional Role"
     },
     {
         "id": "job-backend",
         "title": "Distributed Backend Developer",
         "company": "Razorpay / Stripe Ecosystem",
+        "location": "Bangalore / Remote",
         "tier": "Tier-2",
         "min_cgpa": 6.0,
         "required_skills": ["Node.js", "PostgreSQL", "Redis", "REST APIs", "System Design", "Docker"],
-        "description": "Design high-concurrency payment gateways, transactional consistency engines, and caching topologies."
+        "description": "Design high-concurrency payment gateways, transactional consistency engines, and caching topologies.",
+        "data_mode": "DEMO_DATA",
+        "source_label": "Campus Partner Drive",
+        "is_live": False,
+        "updated_at": "Curated Institutional Role"
     },
     {
         "id": "job-data-scientist",
         "title": "Applied Data Scientist & ML Engineer",
         "company": "Zomato AI Research",
+        "location": "Delhi NCR / Hybrid",
         "tier": "Tier-2",
         "min_cgpa": 6.0,
         "required_skills": ["Python", "SQL", "Scikit-Learn", "Pandas", "PyTorch", "Data Modeling"],
-        "description": "Build predictive demand pipelines, customer propensity algorithms, and A/B test experiments."
+        "description": "Build predictive demand pipelines, customer propensity algorithms, and scalable A/B test experiments.",
+        "data_mode": "DEMO_DATA",
+        "source_label": "Campus Partner Drive",
+        "is_live": False,
+        "updated_at": "Curated Institutional Role"
     }
 ]
 
-# Multi-Style Verified Resource Catalog (Zero Hallucination)
+# Multi-Style Verified Resource Catalog
 VERIFIED_LEARNING_CATALOG = {
     "RAG Pipelines": {
         "PROJECT_BASED": {
@@ -53,21 +70,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "GitHub Production Lab",
             "url": "https://github.com/pinecone-io/examples",
             "duration": "6 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Building Production RAG Systems",
             "provider": "DeepLearning.AI / Coursera",
             "url": "https://www.deeplearning.ai/short-courses/retrieval-augmented-generation/",
             "duration": "8 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "Retrieval-Augmented Generation Architecture Specs",
             "provider": "LangChain & Pinecone Docs",
             "url": "https://docs.pinecone.io/guides/get-started/overview",
             "duration": "4 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "Vector Embeddings": {
@@ -76,21 +96,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "Hugging Face Open Source Labs",
             "url": "https://huggingface.co/tasks/sentence-similarity",
             "duration": "5 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Vector Embeddings & Semantic Search in Depth",
             "provider": "NPTEL & DeepLearning.AI",
             "url": "https://nptel.ac.in/courses/106105163",
             "duration": "6 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "Vector Distance Metrics & Mathematical Foundations",
             "provider": "Pinecone Learning Center",
             "url": "https://www.pinecone.io/learn/vector-embeddings/",
             "duration": "3 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "Docker": {
@@ -99,21 +122,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "Docker Labs & Katacoda",
             "url": "https://docs.docker.com/get-started/workshop/",
             "duration": "4 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Docker Containerization Bootcamp for Engineers",
             "provider": "FreeCodeCamp & TechWorld",
             "url": "https://www.freecodecamp.org/news/docker-course/",
             "duration": "6 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "Docker Engine & Compose Production Reference",
             "provider": "Official Docker Documentation",
             "url": "https://docs.docker.com/engine/reference/builder/",
             "duration": "3 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "Kubernetes": {
@@ -122,21 +148,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "Kubernetes Interactive Tutorials",
             "url": "https://kubernetes.io/docs/tutorials/kubernetes-basics/",
             "duration": "8 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Cloud Native Kubernetes Fundamentals",
             "provider": "Linux Foundation (NPTEL Approved)",
             "url": "https://nptel.ac.in/courses/106105223",
             "duration": "10 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "Kubernetes Core Concepts & Architecture",
             "provider": "Official Kubernetes Documentation",
             "url": "https://kubernetes.io/docs/concepts/",
             "duration": "5 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "System Design": {
@@ -145,21 +174,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "ByteByteGo Architecture Labs",
             "url": "https://github.com/donnemartin/system-design-primer",
             "duration": "8 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Large Scale Distributed Systems Architecture",
             "provider": "MIT OpenCourseWare & NPTEL",
             "url": "https://nptel.ac.in/courses/106105163",
             "duration": "12 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "System Design Primer & RFC Architectural Papers",
-            "provider": "High Scalability & System Design Primer",
+            "provider": "High Scalability Reference",
             "url": "https://github.com/donnemartin/system-design-primer",
             "duration": "6 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "Redis": {
@@ -168,21 +200,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "Redis Developer Labs",
             "url": "https://developer.redis.com/",
             "duration": "4 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Redis In-Memory Data Structures Masterclass",
             "provider": "Redis University",
             "url": "https://university.redis.com/",
             "duration": "5 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "Redis Command Reference & Eviction Strategies",
             "provider": "Official Redis Documentation",
             "url": "https://redis.io/documentation",
             "duration": "3 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "FastAPI": {
@@ -191,21 +226,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "FastAPI Full-Stack GitHub Labs",
             "url": "https://github.com/tiangolo/fastapi",
             "duration": "5 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Building Production Python APIs with FastAPI",
             "provider": "Coursera & FreeCodeCamp",
             "url": "https://www.freecodecamp.org/news/fastapi-quickstart/",
             "duration": "6 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "FastAPI Interactive Tutorial & Dependency Injection",
             "provider": "Official FastAPI Documentation",
             "url": "https://fastapi.tiangolo.com/tutorial/",
             "duration": "4 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     },
     "PostgreSQL": {
@@ -214,21 +252,24 @@ VERIFIED_LEARNING_CATALOG = {
             "provider": "PostgreSQL Exercise Labs",
             "url": "https://pgexercises.com/",
             "duration": "5 Hours",
-            "format": "🛠️ Hands-on Project Lab"
+            "format": "🛠️ Hands-on Project Lab",
+            "data_mode": "DEMO_DATA"
         },
         "VIDEO_LECTURES": {
             "title": "Database Management Systems & SQL Fundamentals",
             "provider": "NPTEL (IIT Kharagpur)",
             "url": "https://nptel.ac.in/courses/106105175",
             "duration": "8 Hours",
-            "format": "🎥 Video Lecture Course"
+            "format": "🎥 Video Lecture Course",
+            "data_mode": "DEMO_DATA"
         },
         "DOCS_READING": {
             "title": "PostgreSQL Concurrency Control & Isolation Levels",
             "provider": "Official PostgreSQL Documentation",
             "url": "https://www.postgresql.org/docs/current/transaction-iso.html",
             "duration": "3 Hours",
-            "format": "📖 Official Documentation"
+            "format": "📖 Official Documentation",
+            "data_mode": "DEMO_DATA"
         }
     }
 }
@@ -242,7 +283,8 @@ HACKATHON_SEEDS = [
         "prize": "₹1,00,000 / Theme",
         "deadline": "In 18 Days",
         "tag": "Government & AI",
-        "link": "https://www.sih.gov.in"
+        "link": "https://www.sih.gov.in",
+        "data_mode": "DEMO_DATA"
     },
     {
         "id": "hack-2",
@@ -252,10 +294,12 @@ HACKATHON_SEEDS = [
         "prize": "$20,000 + Tier-1 Job Direct Interview",
         "deadline": "In 25 Days",
         "tag": "Algorithms & Systems",
-        "link": "https://campuscommune.tcs.com/en-in/intro/contests/codevita"
+        "link": "https://campuscommune.tcs.com/en-in/intro/contests/codevita",
+        "data_mode": "DEMO_DATA"
     }
 ]
 
+# Audited & Internally Consistent Demo Profiles
 STUDENT_DATABASE = [
     {
         "id": "stud-01",
@@ -269,9 +313,11 @@ STUDENT_DATABASE = [
         "sla_hours_pending": 14,
         "admin_status": "Approved",
         "target_role": "job-ai-sys",
-        "skills": ["Python", "PyTorch", "FastAPI", "Vector Embeddings", "Docker", "SQL", "Git"],
-        "raw_resume": "PRIYA SHARMA | Computer Science\n• Architected RAG pipeline with Pinecone and FastAPI, reducing search latency by 42% across 50,000 papers.\n• Built distributed PyTorch training pipeline utilizing multi-GPU nodes with Docker containers.",
-        "quality_score": 88
+        "skills": ["Python", "PyTorch", "FastAPI", "Vector Embeddings", "RAG Pipelines", "Docker", "SQL", "Git"],
+        "raw_resume": "PRIYA SHARMA | Computer Science | priya.sharma@campus.edu\n• Architected production RAG pipeline with Pinecone and FastAPI, reducing search latency by 42% across 50,000 technical papers.\n• Built distributed PyTorch training pipeline on multi-GPU nodes with Docker containers.",
+        "quality_score": 88,
+        "data_mode": "DEMO_DATA",
+        "profile_persona": "High Performer (AI Systems Focus)"
     },
     {
         "id": "stud-02",
@@ -281,13 +327,15 @@ STUDENT_DATABASE = [
         "address": "Room 108, Boys Residence Hall, Sector 4",
         "branch": "Information Technology",
         "cgpa": 6.8,
-        "active_apps_count": 3,
+        "active_apps_count": 2,
         "sla_hours_pending": 32,
         "admin_status": "Pending",
         "target_role": "job-backend",
         "skills": ["Node.js", "REST APIs", "PostgreSQL", "Git", "JavaScript"],
-        "raw_resume": "RAHUL VERMA | IT Branch\n• Built a backend using Node.js for an e-commerce grocery store.\n• Handled database queries in PostgreSQL and created basic routes.",
-        "quality_score": 58
+        "raw_resume": "RAHUL VERMA | IT Branch | rahul.v@campus.edu\n• Built REST API backend using Node.js for an e-commerce grocery store.\n• Managed relational schema and queries in PostgreSQL.",
+        "quality_score": 58,
+        "data_mode": "DEMO_DATA",
+        "profile_persona": "Developing Developer (Backend Focus)"
     },
     {
         "id": "stud-03",
@@ -297,13 +345,15 @@ STUDENT_DATABASE = [
         "address": "Flat 12, Sunrise Apts, West Campus",
         "branch": "Electronics & Communication",
         "cgpa": 5.6,
-        "active_apps_count": 3,
-        "sla_hours_pending": 54,
+        "active_apps_count": 3,  # Enforces concurrent active application cap
+        "sla_hours_pending": 54,  # Triggers SLA review escalation alert (> 48h)
         "admin_status": "Revision Required",
-        "target_role": "job-ai-sys",
+        "target_role": "job-ai-sys",  # Enforces CGPA < 6.0 Tier-1 restriction
         "skills": ["Manual QA", "Basic Python", "HTML", "CSS"],
-        "raw_resume": "AMIT PATEL | ECE Branch\n• Helped test manual UI forms for student council club website.\n• Wrote basic Python scripts for assignment files.",
-        "quality_score": 35
+        "raw_resume": "AMIT PATEL | ECE Branch | amit.patel@campus.edu\n• Tested UI forms manually for student club portal.\n• Wrote basic Python scripts for file processing.",
+        "quality_score": 35,
+        "data_mode": "DEMO_DATA",
+        "profile_persona": "Underperforming Profile (Clear Skill Gaps & SOP Flags)"
     }
 ]
 
@@ -314,14 +364,16 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Intermediate",
             "question": "How do you handle chunk boundary overlap and lost context when splitting documents into embeddings for RAG?",
             "keywords": ["sliding window", "overlap", "metadata", "hierarchical chunking"],
-            "difficulty": 6
+            "difficulty": 6,
+            "data_mode": "DEMO_DATA"
         },
         {
             "id": "rag-q2",
             "level": "Advanced",
             "question": "Explain the role of a cross-encoder re-ranker before feeding retrieved vectors to an LLM context window.",
             "keywords": ["cross-encoder", "re-ranking", "cohere", "top-k", "hallucination"],
-            "difficulty": 8
+            "difficulty": 8,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "Vector Embeddings": [
@@ -330,7 +382,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Intermediate",
             "question": "What is the difference between Cosine Distance, Dot Product, and Euclidean (L2) distance for vector search?",
             "keywords": ["normalization", "magnitude", "angle", "high-dimensional"],
-            "difficulty": 6
+            "difficulty": 6,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "Docker": [
@@ -339,7 +392,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Foundational",
             "question": "Why should you use multi-stage builds in production Dockerfiles, and how do layers affect image size?",
             "keywords": ["multi-stage", "build artifacts", "layer caching", "attack surface"],
-            "difficulty": 5
+            "difficulty": 5,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "Kubernetes": [
@@ -348,7 +402,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Intermediate",
             "question": "Explain the difference between a Deployment, a StatefulSet, and a DaemonSet in Kubernetes.",
             "keywords": ["persistent storage", "node-level pods", "replicas", "rolling updates"],
-            "difficulty": 7
+            "difficulty": 7,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "System Design": [
@@ -357,7 +412,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Intermediate",
             "question": "How would you design an idempotent payment processing API to prevent double-charging on network retry?",
             "keywords": ["idempotency key", "redis lock", "database transaction", "unique constraint"],
-            "difficulty": 7
+            "difficulty": 7,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "FastAPI": [
@@ -366,7 +422,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Foundational",
             "question": "How does FastAPI achieve high performance using ASGI, Pydantic, and async/await syntax in Python?",
             "keywords": ["event loop", "starlette", "concurrency", "type hints", "pydantic"],
-            "difficulty": 6
+            "difficulty": 6,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "Redis": [
@@ -375,7 +432,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Intermediate",
             "question": "What cache eviction policies does Redis support, and when would you use Cache-Aside vs Write-Through?",
             "keywords": ["lru", "lfu", "ttl", "cache invalidation", "stale data"],
-            "difficulty": 6
+            "difficulty": 6,
+            "data_mode": "DEMO_DATA"
         }
     ],
     "PostgreSQL": [
@@ -384,7 +442,8 @@ INTERVIEW_QUESTION_BANK = {
             "level": "Intermediate",
             "question": "Explain database transaction isolation levels and how MVCC works in PostgreSQL to prevent dirty reads.",
             "keywords": ["isolation levels", "mvcc", "dirty read", "snapshot", "acid"],
-            "difficulty": 7
+            "difficulty": 7,
+            "data_mode": "DEMO_DATA"
         }
     ]
 }
