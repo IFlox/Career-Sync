@@ -1,13 +1,48 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Upload, FileText, CheckCircle2, AlertTriangle, 
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  Upload, FileText, CheckCircle2, AlertTriangle,
   ExternalLink, TrendingUp, Eye, Send, Check, User,
   Bookmark, BookmarkCheck, EyeOff, Sliders, Sparkles, Clock, BookOpen,
-  Compass, Award
+  Compass, Award, RefreshCw
 } from 'lucide-react';
 import { TARGET_JOBS, DEMO_PROFILES } from '../data/seedData';
 import { assessLayoffRisk, MARKET_SKILL_RADAR } from '../data/marketTaxonomy';
 import { evaluateJobMatch } from '../utils/semanticMatcher';
+import { buildProfileReadiness } from '../utils/readiness';
+import {
+  applyCompletedMilestonesToRoadmap,
+  applyMilestoneToggleResult,
+  normalizeCompletedMilestones
+} from '../utils/milestones';
+import { resolveRoadmapRecommendation } from '../utils/roadmapRecommendation';
+import { filterTechnicalJobs, resolveSelectedJobId } from '../utils/jobRelevance';
+import {
+  applyHideSuccess,
+  applyOptimisticHide,
+  resolveVisibleJobState,
+  rollbackHide
+} from '../utils/hiddenJobs';
+import {
+  addAppliedJob,
+  isDuplicateApplicationError,
+  resolveApplicationActionState,
+  restoreAppliedJobs
+} from '../utils/applications';
+import {
+  beginRequest,
+  getProfileState,
+  isLatestRequest,
+  isResponseForStudent,
+  updateProfileState
+} from '../utils/profileState';
+import {
+  addUploadedCandidateId,
+  findCandidateProfile,
+  loadUploadedCandidateIds,
+  mergeCandidateProfiles,
+  normalizeCandidateProfile,
+  removeUploadedCandidateId
+} from '../utils/profileCandidates';
 import ConcentricReadinessDial from './ConcentricReadinessDial';
 import ProgressTimelineWidget from './ProgressTimelineWidget';
 import SkillRadarChart from './SkillRadarChart';
@@ -16,131 +51,463 @@ import ATSPreviewModal from './ATSPreviewModal';
 import PreferenceModal from './PreferenceModal';
 import ReadinessReportModal from './ReadinessReportModal';
 import RetryableErrorCard from './RetryableErrorCard';
+import InlineFeedback from './InlineFeedback';
+import {
+  buildApplicationMessage,
+  buildBookmarkMessage,
+  buildHiddenJobMessage,
+  buildMilestoneMessage,
+  buildPreferencesMessage,
+  buildResumeUploadMessage,
+  buildUrlAnalysisMessage,
+  createErrorFeedback,
+  createInfoFeedback,
+  createSuccessFeedback
+} from '../utils/feedback';
 import { apiClient } from '../api/client';
 
-export default function StudentPortal({ addTrace, onExecutionUpdate }) {
+const buildInitialProfileUi = () => {
+  const jobs = filterTechnicalJobs(TARGET_JOBS);
+  return {
+    jobsList: jobs,
+    selectedJobId: resolveSelectedJobId(jobs, TARGET_JOBS[0]?.id),
+    completedMilestones: [],
+    interviewScore: 70,
+    serverProgress: null,
+    preferences: null,
+    feedbackRecords: [],
+    roadmap: [],
+    isLoadingRoadmap: true,
+    roadmapError: null,
+    jobsError: null,
+    preferencesError: null,
+    feedbackError: null,
+    applicationFeedback: null,
+    milestoneFeedback: null,
+    jobFeedback: null,
+    preferencesFeedback: null,
+    resumeFeedback: null,
+    isUploading: false
+  };
+};
+
+const createInitialProfileState = () =>
+  DEMO_PROFILES.reduce((acc, profile) => {
+    acc[profile.id] = buildInitialProfileUi();
+    return acc;
+  }, {});
+
+// Uploaded candidates are only restored from storage when the browser exposes it.
+const getCandidateStorage = () => {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export default function StudentPortal() {
   const [currentStudent, setCurrentStudent] = useState(DEMO_PROFILES[0]);
-  const [jobsList, setJobsList] = useState(TARGET_JOBS);
-  const [selectedJobId, setSelectedJobId] = useState(TARGET_JOBS[0].id);
-  const [isUploading, setIsUploading] = useState(false);
+  // Demo profiles plus any candidate created by a resume upload.
+  const [candidateProfiles, setCandidateProfiles] = useState(() =>
+    mergeCandidateProfiles(DEMO_PROFILES, [])
+  );
+  const [profileUiByStudent, setProfileUiByStudent] = useState(createInitialProfileState);
   const [isATSModalOpen, setIsATSModalOpen] = useState(false);
   const [isPreferenceModalOpen, setIsPreferenceModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [completedMilestones, setCompletedMilestones] = useState([1]);
-  const [interviewScore, setInterviewScore] = useState(70);
-  const [serverProgress, setServerProgress] = useState(null);
   const [urlInput, setUrlInput] = useState("");
   const [isScrapingUrl, setIsScrapingUrl] = useState(false);
-  const [appliedJobs, setAppliedJobs] = useState([]);
-  const [preferences, setPreferences] = useState(null);
-  const [feedbackRecords, setFeedbackRecords] = useState([]);
-  const [dynamicRoadmap, setDynamicRoadmap] = useState([]);
-  const [isLoadingRoadmap, setIsLoadingRoadmap] = useState(false);
-  const [roadmapError, setRoadmapError] = useState(null);
-  const [jobsError, setJobsError] = useState(null);
-  const [nextAction, setNextAction] = useState(null);
-  const [profileDataError, setProfileDataError] = useState(null);
+  const [submittingApplicationStudents, setSubmittingApplicationStudents] = useState([]);
+  const [appliedJobsByStudent, setAppliedJobsByStudent] = useState({});
+  const [applicationEventsByStudent, setApplicationEventsByStudent] = useState({});
+  const [applicationHistoryByStudent, setApplicationHistoryByStudent] = useState({});
 
-  const fetchRankedJobs = () => {
-    setJobsError(null);
-    apiClient.getRankedJobs(currentStudent.id)
+  // Inline feedback replaces disruptive alert() calls for each action area.
+  const [urlFeedback, setUrlFeedback] = useState(null);
+
+  const profileUi = useMemo(
+    () => getProfileState(profileUiByStudent, currentStudent.id) || buildInitialProfileUi(),
+    [profileUiByStudent, currentStudent.id]
+  );
+  const {
+    jobsList,
+    selectedJobId,
+    completedMilestones,
+    interviewScore,
+    serverProgress,
+    preferences,
+    feedbackRecords,
+    roadmap: dynamicRoadmap,
+    isLoadingRoadmap,
+    roadmapError,
+    jobsError,
+    preferencesError,
+    feedbackError,
+    applicationFeedback,
+    milestoneFeedback,
+    jobFeedback,
+    preferencesFeedback,
+    resumeFeedback,
+    isUploading
+  } = profileUi;
+  const profileDataError = [preferencesError, feedbackError].filter(Boolean).join(' ') || null;
+
+  const lastResumeFilesRef = useRef({});
+  const requestIdsRef = useRef({});
+  // Guards against re-entrant clicks per student while a submission is in flight.
+  const submittingStudentsRef = useRef(new Set());
+  const currentStudentIdRef = useRef(currentStudent.id);
+
+  const updateProfileUiFor = (studentId, patch) => {
+    setProfileUiByStudent(prev =>
+      updateProfileState(prev, studentId, patch, buildInitialProfileUi)
+    );
+  };
+
+  // Creates the per-profile UI entry for a candidate once. Re-uploading the
+  // same candidate keeps any state the user already built up.
+  const ensureProfileUi = (studentId, targetJobId) => {
+    if (!studentId) return;
+    setProfileUiByStudent(prev => {
+      if (getProfileState(prev, studentId)) return prev;
+
+      const base = buildInitialProfileUi();
+      return updateProfileState(
+        prev,
+        studentId,
+        { selectedJobId: resolveSelectedJobId(base.jobsList, targetJobId || base.selectedJobId) },
+        buildInitialProfileUi
+      );
+    });
+  };
+
+  const registerUploadedCandidate = (profile) => {
+    if (!profile?.id) return;
+    // A candidate id must never shadow one of the static demo profiles.
+    if (findCandidateProfile(DEMO_PROFILES, profile.id)) return;
+
+    setCandidateProfiles(prev => mergeCandidateProfiles(prev, [profile]));
+    ensureProfileUi(profile.id, profile.targetRole);
+    addUploadedCandidateId(getCandidateStorage(), profile.id);
+  };
+
+  const currentApplicationHistory = applicationHistoryByStudent[currentStudent.id] || {
+    status: 'idle',
+    error: null
+  };
+  const appliedJobs = useMemo(
+    () => restoreAppliedJobs({
+      localJobIds: appliedJobsByStudent[currentStudent.id] || [],
+      progress: { recent_events: applicationEventsByStudent[currentStudent.id] || [] },
+      jobs: jobsList
+    }),
+    [appliedJobsByStudent, applicationEventsByStudent, jobsList, currentStudent.id]
+  );
+  const isLoadingApplicationHistory =
+    currentApplicationHistory.status === 'idle' || currentApplicationHistory.status === 'loading';
+  const applicationHistoryError =
+    currentApplicationHistory.status === 'error' ? currentApplicationHistory.error : null;
+
+  const loadStudentProgress = (studentId = currentStudent.id) => {
+    const requestKey = `progress:${studentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+
+    setApplicationHistoryByStudent(prev => ({
+      ...prev,
+      [studentId]: { status: 'loading', error: null }
+    }));
+
+    return apiClient.getStudentProgress(studentId)
+      .then(data => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return data;
+        updateProfileUiFor(studentId, current => {
+          const completedMilestones = normalizeCompletedMilestones(
+            data.completed_milestones,
+            current.completedMilestones
+          );
+
+          return {
+            serverProgress: data,
+            completedMilestones,
+            roadmap: applyCompletedMilestonesToRoadmap(
+              current.roadmap,
+              completedMilestones
+            )
+          };
+        });
+        setApplicationEventsByStudent(prev => ({
+          ...prev,
+          [studentId]: Array.isArray(data.recent_events) ? data.recent_events : []
+        }));
+        setApplicationHistoryByStudent(prev => ({
+          ...prev,
+          [studentId]: { status: 'ready', error: null }
+        }));
+        return data;
+      })
+      .catch(err => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) throw err;
+        const message = err?.message || "Failed to load application history.";
+        setApplicationHistoryByStudent(prev => ({
+          ...prev,
+          [studentId]: { status: 'error', error: message }
+        }));
+        throw err;
+      });
+  };
+
+  const loadPreferences = (studentId = currentStudent.id) => {
+    const requestKey = `preferences:${studentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+    updateProfileUiFor(studentId, { preferencesError: null });
+
+    return apiClient.getPreferences(studentId)
+      .then(data => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return data;
+        updateProfileUiFor(studentId, { preferences: data });
+        return data;
+      })
+      .catch(err => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) throw err;
+        updateProfileUiFor(studentId, {
+          preferencesError: err?.message || "Failed to load career preferences."
+        });
+        throw err;
+      });
+  };
+
+  const loadFeedback = (studentId = currentStudent.id) => {
+    const requestKey = `feedback:${studentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+    updateProfileUiFor(studentId, { feedbackError: null });
+
+    return apiClient.getFeedback(studentId)
       .then(res => {
-        if (res.ranked_jobs && res.ranked_jobs.length > 0) {
-          setJobsList(res.ranked_jobs);
-          setSelectedJobId(res.ranked_jobs[0].id);
-        }
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return res;
+        updateProfileUiFor(studentId, current => {
+          const feedbackRecords = Array.isArray(res.feedback) ? res.feedback : [];
+          return {
+            feedbackRecords,
+            selectedJobId: resolveVisibleJobState({
+              jobs: current.jobsList,
+              selectedJobId: current.selectedJobId,
+              feedbackRecords
+            }).selectedJobId
+          };
+        });
+        return res;
+      })
+      .catch(err => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) throw err;
+        updateProfileUiFor(studentId, {
+          feedbackError: err?.message || "Failed to load recommendation feedback."
+        });
+        throw err;
+      });
+  };
+
+  const retryApplicationHistory = () => {
+    loadStudentProgress(currentStudent.id).catch(() => {});
+  };
+
+  const fetchRankedJobs = (studentId = currentStudent.id) => {
+    const requestKey = `jobs:${studentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+    updateProfileUiFor(studentId, { jobsError: null });
+
+    apiClient.getRankedJobs(studentId)
+      .then(res => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+        const rankedJobs = Array.isArray(res?.ranked_jobs) ? res.ranked_jobs : [];
+        const technicalJobs = filterTechnicalJobs(rankedJobs);
+        updateProfileUiFor(studentId, current => ({
+          jobsList: technicalJobs,
+          selectedJobId: resolveVisibleJobState({
+            jobs: technicalJobs,
+            selectedJobId: current.selectedJobId,
+            feedbackRecords: current.feedbackRecords
+          }).selectedJobId
+        }));
       })
       .catch((err) => {
-        setJobsError(err.message || "Failed to load personalized job ranking.");
-        setJobsList(TARGET_JOBS);
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+        const fallbackJobs = filterTechnicalJobs(TARGET_JOBS);
+        updateProfileUiFor(studentId, current => ({
+          jobsError: err?.message || "Failed to load personalized job ranking.",
+          jobsList: fallbackJobs,
+          selectedJobId: resolveVisibleJobState({
+            jobs: fallbackJobs,
+            selectedJobId: current.selectedJobId,
+            feedbackRecords: current.feedbackRecords
+          }).selectedJobId
+        }));
       });
   };
 
   useEffect(() => {
-    let isMounted = true;
+    const studentId = currentStudent.id;
+    currentStudentIdRef.current = studentId;
 
-    apiClient.getPreferences(currentStudent.id)
-      .then(data => { if (isMounted) setPreferences(data); })
-      .catch((err) => setProfileDataError(err.message || "Failed to load career preferences."));
-
-    apiClient.getFeedback(currentStudent.id)
-      .then(res => { if (isMounted) setFeedbackRecords(res.feedback || []); })
-      .catch((err) => setProfileDataError(err.message || "Failed to load recommendation feedback."));
-
-    fetchRankedJobs();
-
-    apiClient.getStudentProgress(currentStudent.id)
-      .then(data => {
-        if (isMounted) {
-          setServerProgress(data);
-          setCompletedMilestones(data.completed_milestones || []);
-        }
-      })
-      .catch((err) => setProfileDataError(err.message || "Failed to load saved progress."));
-
-    return () => { isMounted = false; };
+    loadPreferences(studentId).catch(() => {});
+    loadFeedback(studentId).catch(() => {});
+    fetchRankedJobs(studentId);
+    loadStudentProgress(studentId).catch(() => {});
   }, [currentStudent.id]);
 
-  const fetchRoadmap = () => {
-    setIsLoadingRoadmap(true);
-    setRoadmapError(null);
+  // Restore uploaded candidates from the existing persisted student profile
+  // endpoint. Only ids this browser created are requested; nothing is invented.
+  useEffect(() => {
+    const storage = getCandidateStorage();
+    const storedIds = loadUploadedCandidateIds(storage);
+    if (storedIds.length === 0) return undefined;
 
-    apiClient.getRoadmap(currentStudent.id, selectedJobId)
-      .then(res => {
-        if (res.roadmap) {
-          setDynamicRoadmap(res.roadmap);
+    let cancelled = false;
+
+    Promise.allSettled(storedIds.map(id => apiClient.getStudentProfile(id)))
+      .then(results => {
+        if (cancelled) return;
+
+        const restored = [];
+        results.forEach((result, index) => {
+          const studentId = storedIds[index];
+
+          if (result.status !== 'fulfilled') {
+            // A deleted candidate (for example after a workspace reset) is no
+            // longer restorable; transient failures keep the id for next time.
+            if (result.reason?.status === 404) {
+              removeUploadedCandidateId(storage, studentId);
+            }
+            return;
+          }
+
+          const profile = normalizeCandidateProfile(result.value);
+          if (profile) {
+            restored.push(profile);
+            ensureProfileUi(profile.id, profile.targetRole);
+          }
+        });
+
+        if (restored.length > 0) {
+          setCandidateProfiles(prev => mergeCandidateProfiles(prev, restored));
         }
-      })
-      .catch((err) => {
-        setRoadmapError(err.message || "Unable to generate personalized roadmap.");
-        setDynamicRoadmap([]);
-      })
-      .finally(() => {
-        setIsLoadingRoadmap(false);
       });
 
-    apiClient.getNextAction(currentStudent.id, selectedJobId)
-      .then(action => setNextAction(action))
-      .catch((err) => setProfileDataError(err.message || "Failed to load the next recommended action."));
+    return () => { cancelled = true; };
+  }, []);
+
+  const fetchRoadmap = (studentId = currentStudent.id) => {
+    const studentUi = getProfileState(profileUiByStudent, studentId) || buildInitialProfileUi();
+    // A hidden role is never an active roadmap target, even if its feedback
+    // arrived after the profile's selection was last written.
+    const jobId = resolveVisibleJobState({
+      jobs: studentUi.jobsList,
+      selectedJobId: studentUi.selectedJobId,
+      feedbackRecords: studentUi.feedbackRecords
+    }).selectedJobId;
+    const requestKey = `roadmap:${studentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+
+    if (!jobId) {
+      updateProfileUiFor(studentId, {
+        roadmap: [],
+        roadmapError: null,
+        isLoadingRoadmap: false
+      });
+      return;
+    }
+
+    updateProfileUiFor(studentId, { isLoadingRoadmap: true, roadmapError: null });
+
+    apiClient.getRoadmap(studentId, jobId)
+      .then(res => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+        updateProfileUiFor(studentId, current => {
+          const roadmap = Array.isArray(res?.roadmap) ? res.roadmap : [];
+
+          // Once the saved progress snapshot has loaded, its milestone list is
+          // authoritative. This prevents a slower, pre-toggle roadmap response
+          // from re-marking a reopened week as completed.
+          return {
+            roadmap: current.serverProgress
+              ? applyCompletedMilestonesToRoadmap(roadmap, current.completedMilestones)
+              : roadmap
+          };
+        });
+      })
+      .catch((err) => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+        updateProfileUiFor(studentId, {
+          roadmapError: err?.message || "Unable to generate personalized roadmap.",
+          roadmap: []
+        });
+      })
+      .finally(() => {
+        if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+        updateProfileUiFor(studentId, { isLoadingRoadmap: false });
+      });
   };
 
-  useEffect(() => {
-    fetchRoadmap();
-  }, [currentStudent.id, selectedJobId, preferences]);
+  // Hidden feedback, not the raw ranking feed, decides the visible list. This
+  // keeps refreshes and asynchronous feedback loads consistent with a hide.
+  const jobVisibility = useMemo(
+    () => resolveVisibleJobState({ jobs: jobsList, selectedJobId, feedbackRecords }),
+    [jobsList, selectedJobId, feedbackRecords]
+  );
+  const visibleJobs = jobVisibility.visibleJobs;
+  const effectiveSelectedJobId = jobVisibility.selectedJobId;
 
-  const selectedJob = jobsList.find(j => j.id === selectedJobId) || jobsList[0];
+  useEffect(() => {
+    fetchRoadmap(currentStudent.id);
+  }, [currentStudent.id, effectiveSelectedJobId, preferences]);
+
+  const selectedJob =
+    visibleJobs.find(j => j.id === effectiveSelectedJobId) || visibleJobs[0] || null;
   const matchResult = evaluateJobMatch(currentStudent, selectedJob, preferences, feedbackRecords);
   const layoffRisk = assessLayoffRisk(currentStudent.skills);
 
-  const reqSkillsCount = (selectedJob.requiredSkills || selectedJob.required_skills || []).length;
+  const reqSkillsCount = selectedJob
+    ? (selectedJob.requiredSkills || selectedJob.required_skills || []).length
+    : 0;
   const skillCoveragePct = Math.round((matchResult.matchedSkills.length / Math.max(1, reqSkillsCount)) * 100);
-  const planCompletionPct = Math.round((completedMilestones.length / 4) * 100);
 
-  const overallReadiness = Math.round(
-    (0.40 * skillCoveragePct) +
-    (0.25 * interviewScore) +
-    (0.20 * planCompletionPct) +
-    (0.15 * (currentStudent.qualityScore || currentStudent.quality_score || 75))
-  );
-
-  const readinessPayload = {
-    overall: overallReadiness,
+  // Single source of truth for displayed readiness. Milestone completion is
+  // derived from the same roadmap and milestone list rendered by the page, so
+  // completing or reopening a week updates every readiness display together.
+  const readinessPayload = buildProfileReadiness({
+    roadmap: dynamicRoadmap,
+    completedMilestones,
     skill_coverage: skillCoveragePct,
     interview_performance: interviewScore,
-    milestone_completion: planCompletionPct,
     profile_quality: currentStudent.qualityScore || currentStudent.quality_score || 75
-  };
+  });
 
-  const handlePdfDrop = async (e) => {
-    const file = e.target.files?.[0];
+  // Single readiness value shared by every readiness display on the page.
+  const overallReadiness = readinessPayload.overall;
+  // The plan progress badge reads the same milestone component as readiness.
+  const milestoneCompletionPct = readinessPayload.milestone_completion;
+
+  // The recommendation is derived from the exact roadmap and milestone state
+  // rendered by the preparation plan below.
+  const recommendationView = resolveRoadmapRecommendation({
+    roadmap: dynamicRoadmap,
+    completedMilestones,
+    targetRoleTitle: selectedJob?.title || "No active technical role",
+    readiness: readinessPayload,
+    isLoading: isLoadingRoadmap,
+    error: roadmapError
+  });
+
+  const uploadResumeFile = async (file) => {
     if (!file) return;
 
-    setIsUploading(true);
-    addTrace?.(`Uploading ${file.name}...`);
+    const uploadStudentId = currentStudent.id;
+    lastResumeFilesRef.current[uploadStudentId] = file;
+    updateProfileUiFor(uploadStudentId, { isUploading: true, resumeFeedback: null });
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("target_job_id", selectedJobId);
+    formData.append("target_job_id", selectedJobId || TARGET_JOBS[0].id);
 
     try {
       const response = await fetch("/api/v1/students/resume/upload-pdf", {
@@ -161,120 +528,371 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         activeAppsCount: 0,
         slaHoursPending: 1,
         adminStatus: "Pending",
+        targetRole: selectedJobId || TARGET_JOBS[0].id,
         skills: data.extracted_skills || [],
         rawResume: data.clean_resume || "",
         qualityScore: data.quality_audit?.quality_score || 80,
         weakBullets: data.quality_audit?.weak_bullets || [],
-        data_mode: "LIVE_DATA"
+        data_mode: "LIVE_DATA",
+        source: 'uploaded'
       };
 
-      setCurrentStudent(newStudentObj);
-      onExecutionUpdate?.(data.execution_trace, data.total_latency_ms);
-      addTrace?.(`Analyzed ${file.name} (CGPA: ${data.cgpa}). Saved to database.`);
+      updateProfileUiFor(data.student_id, {
+        resumeFeedback: createSuccessFeedback(
+          "Resume uploaded",
+          buildResumeUploadMessage(file.name, data.cgpa)
+        )
+      });
+
+      // Register the candidate so it stays selectable from the profile list,
+      // then activate it only if the student did not switch mid-upload.
+      registerUploadedCandidate(newStudentObj);
+
+      const collidesWithDemoProfile = Boolean(
+        findCandidateProfile(DEMO_PROFILES, newStudentObj.id)
+      );
+      if (
+        !collidesWithDemoProfile &&
+        isResponseForStudent(uploadStudentId, currentStudentIdRef.current)
+      ) {
+        setCurrentStudent(newStudentObj);
+      }
     } catch (err) {
-      alert(`Resume upload failed: ${err.message}`);
-      addTrace?.(`Upload error: ${err.message}`, 'error');
+      updateProfileUiFor(uploadStudentId, {
+        resumeFeedback: createErrorFeedback(
+          "Resume upload failed",
+          err,
+          { fallback: "The resume could not be processed. Please try again." }
+        )
+      });
     } finally {
-      setIsUploading(false);
+      updateProfileUiFor(uploadStudentId, { isUploading: false });
     }
   };
 
-  const toggleMilestone = async (weekNum) => {
-    try {
-      const res = await apiClient.toggleMilestone(currentStudent.id, weekNum, overallReadiness);
-      setCompletedMilestones(res.completed_milestones);
-      const updated = await apiClient.getStudentProgress(currentStudent.id);
-      setServerProgress(updated);
-      addTrace?.(`Updated Week ${weekNum} task.`);
+  const handlePdfDrop = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-      apiClient.getNextAction(currentStudent.id, selectedJobId)
-        .then(act => setNextAction(act))
-        .catch(() => {});
+    uploadResumeFile(file);
+    // Allow re-selecting the same file for a retry.
+    e.target.value = "";
+  };
+
+  const toggleMilestone = async (
+    weekNum,
+    targetStudentId = currentStudent.id,
+    targetReadiness = overallReadiness
+  ) => {
+    const requestKey = `milestone:${targetStudentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+    updateProfileUiFor(targetStudentId, { milestoneFeedback: null });
+
+    try {
+      const res = await apiClient.toggleMilestone(targetStudentId, weekNum, targetReadiness);
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+
+      // Apply the response to the profile that made the request. The functional
+      // patch reads that profile's latest state, so switching profiles can
+      // never write the toggle into another profile.
+      updateProfileUiFor(targetStudentId, current => {
+        const completedMilestones = applyMilestoneToggleResult(
+          res,
+          weekNum,
+          current.completedMilestones
+        ).completedMilestones;
+
+        return {
+          completedMilestones,
+          roadmap: applyCompletedMilestonesToRoadmap(
+            current.roadmap,
+            completedMilestones
+          )
+        };
+      });
+
+      const requestedProfileState = getProfileState(profileUiByStudent, targetStudentId);
+      const { isCompleted } = applyMilestoneToggleResult(
+        res,
+        weekNum,
+        requestedProfileState?.completedMilestones
+      );
+
+      // Refresh the saved-progress snapshot and invalidate any older progress
+      // response for this student before applying the new one. The toggle's
+      // milestone list stays in place if this refresh fails.
+      const progressRequestKey = `progress:${targetStudentId}`;
+      const progressRequestId = beginRequest(requestIdsRef.current, progressRequestKey);
+      let refreshedProgress = null;
+      try {
+        refreshedProgress = await apiClient.getStudentProgress(targetStudentId);
+      } catch {
+        // The saved milestone state remains authoritative if this refresh fails.
+      }
+
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+
+      if (
+        refreshedProgress
+        && isLatestRequest(requestIdsRef.current, progressRequestKey, progressRequestId)
+      ) {
+        updateProfileUiFor(targetStudentId, current => {
+          const completedMilestones = normalizeCompletedMilestones(
+            refreshedProgress.completed_milestones,
+            current.completedMilestones
+          );
+
+          return {
+            serverProgress: refreshedProgress,
+            completedMilestones,
+            roadmap: applyCompletedMilestonesToRoadmap(
+              current.roadmap,
+              completedMilestones
+            )
+          };
+        });
+      }
+
+      // Readiness is never read from the toggle response. The updated milestone
+      // list flows back through the shared readiness utility when the page
+      // re-renders, keeping header, dial, dossier, recommendation and saved
+      // progress on the same value.
+      updateProfileUiFor(targetStudentId, {
+        milestoneFeedback: createSuccessFeedback(
+          "Milestone saved",
+          buildMilestoneMessage(weekNum, isCompleted)
+        )
+      });
     } catch (err) {
-      alert(`Could not save milestone: ${err.message}`);
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+      updateProfileUiFor(targetStudentId, {
+        milestoneFeedback: {
+          ...createErrorFeedback("Could not save milestone", err, {
+            fallback: "Your milestone change was not saved. Please try again."
+          }),
+          retry: () => toggleMilestone(weekNum, targetStudentId, targetReadiness)
+        }
+      });
     }
   };
 
   const handleIngestUrl = async () => {
-    if (!urlInput.trim()) return;
+    const url = urlInput.trim();
+    if (!url) return;
+
     setIsScrapingUrl(true);
-    addTrace?.(`Analyzing opportunity at ${urlInput}...`);
+    setUrlFeedback(null);
 
     try {
-      const data = await apiClient.ingestExternalUrl(urlInput);
-      addTrace?.(`Extracted skill criteria from job listing.`);
-      alert(`Job analyzed! Extracted criteria: ${(data.ai_parsed?.required_skills || []).join(", ")}`);
+      const data = await apiClient.ingestExternalUrl(url);
+      const skills = data.ai_parsed?.required_skills || [];
+      setUrlFeedback(createSuccessFeedback("Job analyzed", buildUrlAnalysisMessage(skills)));
       setUrlInput("");
     } catch (err) {
-      alert(`URL ingestion failed: ${err.message}`);
-      addTrace?.(`URL ingest error: ${err.message}`, "error");
+      setUrlFeedback(createErrorFeedback("URL analysis failed", err, {
+        fallback: "That job link could not be analyzed. Check the URL and try again."
+      }));
     } finally {
       setIsScrapingUrl(false);
     }
   };
 
   const handleApplyToJob = async () => {
-    if (appliedJobs.includes(selectedJob.id)) return;
+    if (!selectedJob || appliedJobs.includes(selectedJob.id)) return;
+
+    const studentId = currentStudent.id;
+    // A single in-flight submission per student prevents double-click
+    // enrollments from sending two requests before applied state updates.
+    if (submittingStudentsRef.current.has(studentId)) return;
+
+    const jobId = selectedJob.id;
+    const jobTitle = selectedJob.title;
+    const company = selectedJob.company;
+    const tier = selectedJob.tier;
+
+    submittingStudentsRef.current.add(studentId);
+    setSubmittingApplicationStudents(prev =>
+      prev.includes(studentId) ? prev : [...prev, studentId]
+    );
+    updateProfileUiFor(studentId, { applicationFeedback: null });
 
     try {
-      addTrace?.(`Submitting application to ${selectedJob.title} (${selectedJob.company})...`);
       const res = await apiClient.submitCampusApplication({
-        student_id: currentStudent.id,
-        job_id: selectedJob.id,
-        job_title: selectedJob.title,
-        company: selectedJob.company,
-        tier: selectedJob.tier
+        student_id: studentId,
+        job_id: jobId,
+        job_title: jobTitle,
+        company,
+        tier
       });
 
-      setAppliedJobs(prev => [...prev, selectedJob.id]);
-      setCurrentStudent(prev => ({ ...prev, activeAppsCount: res.active_applications }));
-      addTrace?.(`[ENROLLED]: Registered for ${selectedJob.title}. Drives: ${res.active_applications}/3`);
-      alert(res.message);
+      setAppliedJobsByStudent(prev => addAppliedJob(prev, studentId, jobId));
+      if (isResponseForStudent(studentId, currentStudentIdRef.current)) {
+        setCurrentStudent(prev => (
+          prev.id === studentId ? { ...prev, activeAppsCount: res.active_applications } : prev
+        ));
+      }
+      updateProfileUiFor(studentId, {
+        applicationFeedback: createSuccessFeedback(
+          "Application submitted",
+          buildApplicationMessage(res.message, jobTitle)
+        )
+      });
     } catch (err) {
-      alert(`Application Rejected: ${err.message}`);
-      addTrace?.(`[SOP REJECTION]: ${err.message}`, "error");
+      if (isDuplicateApplicationError(err)) {
+        // The backend enforces one application per student/job. Treat its
+        // duplicate response as the already-applied state instead of an error.
+        setAppliedJobsByStudent(prev => addAppliedJob(prev, studentId, jobId));
+        updateProfileUiFor(studentId, {
+          applicationFeedback: createInfoFeedback(
+            "Already enrolled",
+            `You have already applied to ${jobTitle}. Duplicate applications are not created.`
+          )
+        });
+        return;
+      }
+
+      updateProfileUiFor(studentId, {
+        applicationFeedback: createErrorFeedback("Application rejected", err, {
+          fallback: "The application could not be submitted."
+        })
+      });
+    } finally {
+      submittingStudentsRef.current.delete(studentId);
+      setSubmittingApplicationStudents(prev => prev.filter(id => id !== studentId));
     }
   };
 
   const handleSavePreferences = async (newPrefs) => {
-    try {
-      const res = await apiClient.updatePreferences(currentStudent.id, newPrefs);
-      setPreferences(res.preferences);
-      addTrace?.(`Saved preferences. Re-ranking job opportunities & regenerating roadmap...`);
-      fetchRankedJobs();
-    } catch (err) {
-      alert(`Could not save preferences: ${err.message}`);
-    }
+    const studentId = currentStudent.id;
+    updateProfileUiFor(studentId, { preferencesFeedback: null });
+
+    // Failures propagate so PreferenceModal can keep itself open and show the
+    // real error inline instead of closing silently.
+    const res = await apiClient.updatePreferences(studentId, newPrefs);
+    updateProfileUiFor(studentId, {
+      preferences: res.preferences,
+      preferencesFeedback: createSuccessFeedback("Preferences saved", buildPreferencesMessage())
+    });
+    fetchRankedJobs(studentId);
   };
 
-  const handleToggleSaveJob = async (jobId) => {
-    const isSaved = matchResult.isSaved;
+  const handleToggleSaveJob = async (
+    jobId,
+    targetStudentId = currentStudent.id,
+    jobTitle = selectedJob?.title || "this role",
+    isSaved = matchResult.isSaved
+  ) => {
+    if (!selectedJob) return;
+
     const action = isSaved ? 'REJECTED' : 'SAVED';
+    const requestKey = `feedback-action:${targetStudentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+    updateProfileUiFor(targetStudentId, { jobFeedback: null });
 
     try {
-      await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, action);
-      addTrace?.(`${isSaved ? 'Removed bookmark from' : 'Bookmarked'} ${selectedJob.title}.`);
-      const res = await apiClient.getFeedback(currentStudent.id);
-      setFeedbackRecords(res.feedback || []);
+      await apiClient.submitFeedback(targetStudentId, 'JOB', jobId, action);
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+      const res = await apiClient.getFeedback(targetStudentId);
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+      updateProfileUiFor(targetStudentId, {
+        feedbackRecords: res.feedback || [],
+        jobFeedback: createSuccessFeedback(
+          isSaved ? "Bookmark removed" : "Role bookmarked",
+          buildBookmarkMessage(isSaved, jobTitle)
+        )
+      });
     } catch (err) {
-      alert(`Could not update bookmark: ${err.message}`);
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+      updateProfileUiFor(targetStudentId, {
+        jobFeedback: {
+          ...createErrorFeedback(
+            isSaved ? "Could not remove bookmark" : "Could not bookmark role",
+            err,
+            { fallback: "Your bookmark change was not saved. Please try again." }
+          ),
+          retry: () => handleToggleSaveJob(jobId, targetStudentId, jobTitle, isSaved)
+        }
+      });
     }
   };
 
-  const handleHideJob = async (jobId) => {
+  const handleHideJob = async (
+    jobId,
+    targetStudentId = currentStudent.id,
+    jobTitle = selectedJob?.title || "this role"
+  ) => {
+    if (!jobId) return;
+
+    const requestKey = `feedback-action:${targetStudentId}`;
+    const requestId = beginRequest(requestIdsRef.current, requestKey);
+    const profileState =
+      getProfileState(profileUiByStudent, targetStudentId) || buildInitialProfileUi();
+    const { snapshot } = applyOptimisticHide(profileState, jobId);
+
+    // Hide immediately so the list, selection, match card, roadmap, radar and
+    // interview panel all move to the next visible role in one render.
+    updateProfileUiFor(targetStudentId, current => ({
+      ...applyOptimisticHide(current, jobId).patch,
+      jobFeedback: null
+    }));
+
     try {
-      await apiClient.submitFeedback(currentStudent.id, 'JOB', jobId, 'HIDDEN');
-      addTrace?.(`Moved ${selectedJob.title} to hidden list.`);
-      const res = await apiClient.getFeedback(currentStudent.id);
-      setFeedbackRecords(res.feedback || []);
+      // The feedback request is unchanged: the backend still records HIDDEN.
+      await apiClient.submitFeedback(targetStudentId, 'JOB', jobId, 'HIDDEN');
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+
+      let feedbackRecords = null;
+      try {
+        const res = await apiClient.getFeedback(targetStudentId);
+        if (Array.isArray(res?.feedback)) feedbackRecords = res.feedback;
+      } catch {
+        // The hide was accepted; keep the optimistic record and let the next
+        // profile/feedback load restore the canonical list.
+      }
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+
+      updateProfileUiFor(targetStudentId, current => ({
+        ...applyHideSuccess(current, feedbackRecords),
+        jobFeedback: createSuccessFeedback("Role hidden", buildHiddenJobMessage(jobTitle))
+      }));
     } catch (err) {
-      alert(`Could not hide role: ${err.message}`);
+      if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
+      // Roll back to the exact prior records so a failed hide never removes a
+      // bookmark and never leaves the role missing from the visible list.
+      updateProfileUiFor(targetStudentId, current => ({
+        ...rollbackHide(current, snapshot),
+        jobFeedback: {
+          ...createErrorFeedback("Could not hide role", err, {
+            fallback: "The role could not be hidden. Please try again."
+          }),
+          retry: () => handleHideJob(jobId, targetStudentId, jobTitle)
+        }
+      }));
     }
   };
 
-  const hasApplied = appliedJobs.includes(selectedJob.id);
-  const isCgpaBlocked = selectedJob.tier === "Tier-1" && currentStudent.cgpa < 6.0;
+  const handleSelectJob = (jobId) => {
+    const studentId = currentStudent.id;
+    updateProfileUiFor(studentId, {
+      selectedJobId: jobId,
+      applicationFeedback: null,
+      jobFeedback: null
+    });
+  };
+
+  const hasApplied = selectedJob ? appliedJobs.includes(selectedJob.id) : false;
+  const isCgpaBlocked = selectedJob?.tier === "Tier-1" && currentStudent.cgpa < 6.0;
   const isCapBlocked = currentStudent.activeAppsCount >= 3;
+  const isSubmittingForCurrentStudent = submittingApplicationStudents.includes(currentStudent.id);
+  const applicationAction = resolveApplicationActionState({
+    hasJob: Boolean(selectedJob),
+    hasApplied,
+    isSubmitting: isSubmittingForCurrentStudent,
+    isLoadingHistory: isLoadingApplicationHistory,
+    historyError: applicationHistoryError,
+    isCapBlocked,
+    isCgpaBlocked
+  });
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
@@ -297,7 +915,7 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             Welcome back, {currentStudent.name.split(" ")[0]}
           </h1>
           <p className="text-xs sm:text-sm text-subtle mt-1 max-w-xl">
-            Targeting: <strong className="text-obsidian">{selectedJob.title}</strong> • Placement Readiness: <strong className="text-terracotta-600 font-mono">{overallReadiness}%</strong>
+            Targeting: <strong className="text-obsidian">{selectedJob?.title || "No active technical role"}</strong> • Placement Readiness: <strong className="text-terracotta-600 font-mono">{overallReadiness}%</strong>
           </p>
         </div>
 
@@ -309,14 +927,15 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             <select
               value={currentStudent.id}
               onChange={(e) => {
-                const found = DEMO_PROFILES.find(p => p.id === e.target.value);
+                const found = findCandidateProfile(candidateProfiles, e.target.value);
                 if (found) setCurrentStudent(found);
               }}
               className="text-xs font-bold bg-surface px-3 py-1.5 rounded-xl border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer"
             >
-              {DEMO_PROFILES.map(prof => (
+              {candidateProfiles.map(prof => (
                 <option key={prof.id} value={prof.id}>
                   {prof.name} ({prof.branch.split(" ")[0]})
+                  {prof.source === 'uploaded' ? ' • Uploaded' : ''}
                 </option>
               ))}
             </select>
@@ -340,26 +959,75 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         </div>
       </div>
 
+      {preferencesFeedback && (
+        <InlineFeedback
+          variant={preferencesFeedback.variant}
+          title={preferencesFeedback.title}
+          message={preferencesFeedback.message}
+          onDismiss={() => updateProfileUiFor(currentStudent.id, { preferencesFeedback: null })}
+        />
+      )}
+
       {/* Next Best Action Card */}
-      {nextAction && (
+      {recommendationView.status === 'error' ? (
+        <RetryableErrorCard
+          title="Could Not Load Next Best Step"
+          message={recommendationView.message}
+          onRetry={fetchRoadmap}
+          isRetrying={isLoadingRoadmap}
+        />
+      ) : (
         <div className="bg-gradient-to-r from-terracotta-50 to-amber-50/50 p-5 rounded-3xl border border-terracotta-200/70 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-start space-x-3">
             <div className="w-9 h-9 rounded-2xl bg-terracotta-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <Compass className="w-5 h-5" />
+              <Compass className={`w-5 h-5 ${recommendationView.status === 'loading' ? 'animate-pulse' : ''}`} />
             </div>
-            <div>
+            <div aria-live="polite">
               <span className="text-[10px] uppercase font-bold text-terracotta-700 tracking-wider block">
                 Next Best Step • Agentic Recommendation
               </span>
-              <h3 className="font-extrabold text-obsidian text-sm mt-0.5">{nextAction.headline}</h3>
-              <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">{nextAction.description}</p>
+              {recommendationView.status === 'loading' && (
+                <>
+                  <h3 className="font-extrabold text-obsidian text-sm mt-0.5">Loading your next best step...</h3>
+                  <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">
+                    Matching the recommendation to your visible roadmap and saved milestones.
+                  </p>
+                </>
+              )}
+              {recommendationView.status === 'empty' && (
+                <>
+                  <h3 className="font-extrabold text-obsidian text-sm mt-0.5">No roadmap available</h3>
+                  <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">
+                    A recommendation will appear once your preparation roadmap is available.
+                  </p>
+                </>
+              )}
+              {recommendationView.recommendation && (
+                <>
+                  <h3 className="font-extrabold text-obsidian text-sm mt-0.5">
+                    {recommendationView.recommendation.headline}
+                  </h3>
+                  <p className="text-xs text-zinc-600 mt-0.5 leading-relaxed">
+                    {recommendationView.recommendation.description}
+                  </p>
+                </>
+              )}
             </div>
           </div>
-          <div className="flex items-center space-x-2 shrink-0">
-            <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-3 py-1.5 rounded-full border border-emerald-200">
-              Projected: ~{nextAction.projected_readiness}%
-            </span>
-          </div>
+          {recommendationView.status === 'ready' && (
+            <div className="flex items-center space-x-2 shrink-0">
+              <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-3 py-1.5 rounded-full border border-emerald-200">
+                Projected: ~{recommendationView.recommendation.projected_readiness}%
+              </span>
+            </div>
+          )}
+          {recommendationView.status === 'complete' && (
+            <div className="flex items-center space-x-2 shrink-0">
+              <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-3 py-1.5 rounded-full border border-emerald-200">
+                Readiness: {recommendationView.recommendation.projected_readiness}%
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -386,6 +1054,18 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
               <span className="text-[11px] text-subtle mt-0.5">Automated formatting and gap extraction</span>
               <input type="file" accept=".pdf" onChange={handlePdfDrop} disabled={isUploading} className="hidden" />
             </label>
+
+            {resumeFeedback && (
+              <InlineFeedback
+                variant={resumeFeedback.variant}
+                title={resumeFeedback.title}
+                message={resumeFeedback.message}
+                onRetry={resumeFeedback.variant === 'error' && lastResumeFilesRef.current[currentStudent.id]
+                  ? () => uploadResumeFile(lastResumeFilesRef.current[currentStudent.id])
+                  : undefined}
+                isRetrying={isUploading}
+              />
+            )}
 
             <div className="flex items-center justify-between pt-1">
               <span className="text-xs text-subtle font-medium">Loaded: <strong className="text-obsidian">{currentStudent.name}</strong></span>
@@ -421,7 +1101,10 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
           )}
 
           <ConcentricReadinessDial readiness={readinessPayload} />
-          <ProgressTimelineWidget progressData={serverProgress} />
+          <ProgressTimelineWidget
+            progressData={serverProgress}
+            currentReadiness={overallReadiness}
+          />
 
           {/* External Job Parser */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-3">
@@ -443,6 +1126,16 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                 {isScrapingUrl ? "Analyzing..." : "Analyze"}
               </button>
             </div>
+
+            {urlFeedback && (
+              <InlineFeedback
+                variant={urlFeedback.variant}
+                title={urlFeedback.title}
+                message={urlFeedback.message}
+                onRetry={urlFeedback.variant === 'error' && urlInput.trim() ? handleIngestUrl : undefined}
+                isRetrying={isScrapingUrl}
+              />
+            )}
           </div>
 
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
@@ -492,17 +1185,52 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
         <div className="lg:col-span-7 space-y-6">
           {/* Target Role Selector with Provenance Badges */}
           <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
+            {jobFeedback && (
+              <InlineFeedback
+                variant={jobFeedback.variant}
+                title={jobFeedback.title}
+                message={jobFeedback.message}
+                onRetry={jobFeedback.retry}
+              />
+            )}
             {jobsError ? (
               <RetryableErrorCard
                 title="Could Not Load Opportunities"
                 message={jobsError}
                 onRetry={fetchRankedJobs}
               />
+            ) : visibleJobs.length === 0 ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="p-6 rounded-2.5xl bg-canvas border border-[#E2E2DE] text-center space-y-3"
+              >
+                <div className="w-10 h-10 mx-auto rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-obsidian text-sm">
+                    {jobsList.length > 0 ? "All technical roles are hidden" : "No technical roles available"}
+                  </h3>
+                  <p className="text-xs text-subtle mt-1 leading-relaxed max-w-md mx-auto">
+                    {jobsList.length > 0
+                      ? "You have hidden every technical role in the current feed. Hidden roles stay saved to your profile and remain out of your recommendations."
+                      : "We filtered out non-technical listings from the current opportunity feed. Refresh to check again for software, data, cloud, security, and platform roles."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchRankedJobs}
+                  className="px-4 py-2 rounded-full bg-obsidian text-white text-xs font-bold hover:bg-zinc-800 transition-all shadow-xs"
+                >
+                  Refresh Opportunities
+                </button>
+              </div>
             ) : (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center space-x-2">
+                  <div className="min-w-0 w-full sm:w-auto">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="text-xs text-subtle font-semibold">Active Placement Target:</span>
                       {/* Sprint 3: Provenance Badge */}
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
@@ -515,13 +1243,13 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                           : `📋 Curated Institutional Sample`}
                       </span>
                     </div>
-                    <div className="flex items-center space-x-2 mt-1.5">
+                    <div className="flex items-center space-x-2 mt-1.5 min-w-0">
                       <select
-                        value={selectedJobId}
-                        onChange={(e) => setSelectedJobId(e.target.value)}
-                        className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer max-w-md"
+                        value={effectiveSelectedJobId}
+                        onChange={(e) => handleSelectJob(e.target.value)}
+                        className="text-sm font-bold bg-canvas px-3.5 py-1.5 rounded-full border border-[#E0E0DC] text-obsidian focus:outline-none cursor-pointer w-full min-w-0 sm:w-auto sm:max-w-md"
                       >
-                        {jobsList.map((job, idx) => (
+                        {visibleJobs.map((job, idx) => (
                           <option key={`${job.id}-${idx}`} value={job.id}>
                             {job.title} — {job.company} ({job.composite_score ? `${job.composite_score}% Match` : job.tier})
                           </option>
@@ -616,30 +1344,56 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
                   ))}
                 </div>
 
+                {applicationFeedback && (
+                  <InlineFeedback
+                    variant={applicationFeedback.variant}
+                    title={applicationFeedback.title}
+                    message={applicationFeedback.message}
+                  />
+                )}
+
+                {applicationHistoryError && (
+                  <InlineFeedback
+                    variant="error"
+                    title="Application History Unavailable"
+                    message={applicationHistoryError}
+                    onRetry={retryApplicationHistory}
+                    isRetrying={isLoadingApplicationHistory}
+                  />
+                )}
+
                 <div className="pt-2 border-t border-[#ECECE9] flex items-center justify-between">
                   <span className="text-xs text-subtle">
                     Active Drives: <strong>{currentStudent.activeAppsCount} / 3</strong> enrolled
                   </span>
                   <button
                     onClick={handleApplyToJob}
-                    disabled={hasApplied || isCgpaBlocked || isCapBlocked}
+                    disabled={applicationAction.disabled}
+                    aria-busy={applicationAction.tone === 'loading' || applicationAction.tone === 'submitting'}
                     className={`px-5 py-2 rounded-full text-xs font-bold flex items-center space-x-1.5 transition-all shadow-xs ${
-                      hasApplied
+                      applicationAction.tone === 'applied'
                         ? 'bg-emerald-600 text-white cursor-default'
-                        : isCgpaBlocked || isCapBlocked
+                        : applicationAction.tone === 'loading' || applicationAction.tone === 'submitting'
+                        ? 'bg-zinc-200 text-zinc-500 cursor-wait'
+                        : applicationAction.tone === 'error' || applicationAction.tone === 'blocked' || applicationAction.tone === 'disabled'
                         ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
                         : 'bg-terracotta-500 text-white hover:bg-terracotta-600'
                     }`}
                   >
-                    {hasApplied ? (
+                    {applicationAction.tone === 'applied' ? (
                       <>
                         <Check className="w-3.5 h-3.5" />
-                        <span>Application Submitted</span>
+                        <span>{applicationAction.label}</span>
+                      </>
+                    ) : applicationAction.tone === 'loading' || applicationAction.tone === 'submitting' ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>{applicationAction.label}</span>
                       </>
                     ) : (
                       <>
                         <Send className="w-3.5 h-3.5" />
-                        <span>{isCapBlocked ? "Application Limit (3) Reached" : isCgpaBlocked ? "Restricted by CGPA" : "Enroll for Campus Drive"}</span>
+                        <span>{applicationAction.label}</span>
                       </>
                     )}
                   </button>
@@ -648,95 +1402,107 @@ export default function StudentPortal({ addTrace, onExecutionUpdate }) {
             )}
           </div>
 
-          <SkillRadarChart
-            studentSkills={currentStudent.skills}
-            qualityScore={currentStudent.qualityScore || currentStudent.quality_score || 75}
-            targetRole={selectedJob.title}
-          />
-
-          {/* Dynamic 4-Week Roadmap with Retryable Error Card */}
-          <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <BookOpen className="w-4 h-4 text-terracotta-500" />
-                  <h3 className="font-bold text-obsidian text-base">4-Week Career Preparation Plan</h3>
-                </div>
-                <p className="text-xs text-subtle">
-                  Adapted for <strong className="text-obsidian">{selectedJob.title}</strong> • Style: <strong className="text-obsidian">{preferences?.learning_style?.replace('_', ' ') || 'PROJECT BASED'}</strong>
-                </p>
-              </div>
-              <span className="text-xs font-bold text-obsidian bg-canvas px-3 py-1 rounded-full border border-[#E0E0DC]">
-                {planCompletionPct}% Completed
-              </span>
-            </div>
-
-            {roadmapError ? (
-              <RetryableErrorCard
-                title="Could Not Generate Roadmap"
-                message={roadmapError}
-                onRetry={fetchRoadmap}
-                isRetrying={isLoadingRoadmap}
+          {selectedJob && (
+            <>
+              <SkillRadarChart
+                studentSkills={currentStudent.skills}
+                qualityScore={currentStudent.qualityScore || currentStudent.quality_score || 75}
+                targetRole={selectedJob.title}
               />
-            ) : isLoadingRoadmap ? (
-              <div className="p-8 text-center text-xs text-subtle">Personalizing roadmap modules...</div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {dynamicRoadmap.map((item, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => toggleMilestone(item.week)}
-                    className={`p-4 rounded-2.5xl border transition-all cursor-pointer select-none flex flex-col justify-between space-y-3 ${
-                      item.is_completed || completedMilestones.includes(item.week)
-                        ? 'bg-emerald-50/50 border-emerald-300'
-                        : 'bg-canvas border-[#E2E2DE] hover:border-terracotta-300'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-terracotta-600 uppercase tracking-wider">
-                          Week {item.week} • {item.skill}
-                        </span>
-                        <CheckCircle2 className={`w-4 h-4 ${item.is_completed || completedMilestones.includes(item.week) ? 'text-emerald-600' : 'text-zinc-300'}`} />
-                      </div>
-                      <h4 className="font-bold text-obsidian text-xs mt-1 leading-snug">{item.title}</h4>
-                      <p className="text-[11px] text-subtle mt-0.5">{item.provider}</p>
-                    </div>
 
-                    <div className="space-y-2 pt-1 border-t border-[#E8E8E4]">
-                      <div className="flex items-center justify-between text-[10px] text-zinc-600">
-                        <span className="bg-surface px-2 py-0.5 rounded-full border border-[#E0E0DC] font-medium">
-                          {item.format_badge}
-                        </span>
-                        <span className="flex items-center space-x-1 font-mono text-terracotta-700">
-                          <Clock className="w-3 h-3" />
-                          <span>{item.allocated_hours}h / {item.weekly_budget}h budget</span>
-                        </span>
-                      </div>
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center space-x-1 text-xs font-bold text-obsidian hover:text-terracotta-500"
-                      >
-                        <span>Access Material</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
+              {/* Dynamic 4-Week Roadmap with Retryable Error Card */}
+              <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <BookOpen className="w-4 h-4 text-terracotta-500" />
+                      <h3 className="font-bold text-obsidian text-base">4-Week Career Preparation Plan</h3>
                     </div>
+                    <p className="text-xs text-subtle">
+                      Adapted for <strong className="text-obsidian">{selectedJob.title}</strong> • Style: <strong className="text-obsidian">{preferences?.learning_style?.replace('_', ' ') || 'PROJECT BASED'}</strong>
+                    </p>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  <span className="text-xs font-bold text-obsidian bg-canvas px-3 py-1 rounded-full border border-[#E0E0DC]">
+                    {milestoneCompletionPct}% Completed
+                  </span>
+                </div>
 
-          <MockInterview
-            studentId={currentStudent.id}
-            targetRoleTitle={selectedJob.title}
-            missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : (selectedJob.requiredSkills || ["System Design", "Docker"])}
-            addTrace={addTrace}
-            onScoreUpdate={(score) => setInterviewScore(score)}
-          />
+                {milestoneFeedback && (
+                  <InlineFeedback
+                    variant={milestoneFeedback.variant}
+                    title={milestoneFeedback.title}
+                    message={milestoneFeedback.message}
+                    onRetry={milestoneFeedback.retry}
+                  />
+                )}
+
+                {roadmapError ? (
+                  <RetryableErrorCard
+                    title="Could Not Generate Roadmap"
+                    message={roadmapError}
+                    onRetry={fetchRoadmap}
+                    isRetrying={isLoadingRoadmap}
+                  />
+                ) : isLoadingRoadmap ? (
+                  <div className="p-8 text-center text-xs text-subtle">Personalizing roadmap modules...</div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {dynamicRoadmap.map((item, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => toggleMilestone(item.week)}
+                        className={`p-4 rounded-2.5xl border transition-all cursor-pointer select-none flex flex-col justify-between space-y-3 ${
+                          item.is_completed || completedMilestones.includes(item.week)
+                            ? 'bg-emerald-50/50 border-emerald-300'
+                            : 'bg-canvas border-[#E2E2DE] hover:border-terracotta-300'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-terracotta-600 uppercase tracking-wider">
+                              Week {item.week} • {item.skill}
+                            </span>
+                            <CheckCircle2 className={`w-4 h-4 ${item.is_completed || completedMilestones.includes(item.week) ? 'text-emerald-600' : 'text-zinc-300'}`} />
+                          </div>
+                          <h4 className="font-bold text-obsidian text-xs mt-1 leading-snug">{item.title}</h4>
+                          <p className="text-[11px] text-subtle mt-0.5">{item.provider}</p>
+                        </div>
+
+                        <div className="space-y-2 pt-1 border-t border-[#E8E8E4]">
+                          <div className="flex items-center justify-between text-[10px] text-zinc-600">
+                            <span className="bg-surface px-2 py-0.5 rounded-full border border-[#E0E0DC] font-medium">
+                              {item.format_badge}
+                            </span>
+                            <span className="flex items-center space-x-1 font-mono text-terracotta-700">
+                              <Clock className="w-3 h-3" />
+                              <span>{item.allocated_hours}h / {item.weekly_budget}h budget</span>
+                            </span>
+                          </div>
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center space-x-1 text-xs font-bold text-obsidian hover:text-terracotta-500"
+                          >
+                            <span>Access Material</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <MockInterview
+                studentId={currentStudent.id}
+                targetRoleTitle={selectedJob.title}
+                missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : (selectedJob.requiredSkills || ["System Design", "Docker"])}
+                onScoreUpdate={(score) => updateProfileUiFor(currentStudent.id, { interviewScore: score })}
+              />
+            </>
+          )}
         </div>
       </div>
 

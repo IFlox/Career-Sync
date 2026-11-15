@@ -1,28 +1,53 @@
 import React from 'react';
 import { TrendingUp, Calendar, CheckCircle2 } from 'lucide-react';
+import { clampReadiness } from '../utils/readiness';
+import {
+  buildActivityDots,
+  formatActivityStreakLabel
+} from '../utils/activityStreak';
 
-export default function ProgressTimelineWidget({ progressData }) {
+export default function ProgressTimelineWidget({ progressData, currentReadiness }) {
   const {
     trajectory = [],
     recent_events = [],
-    activity_streak_days = 7
+    activity_streak_days
   } = progressData || {};
+
+  // Dots map one-to-one onto the reported streak; missing data shows no activity.
+  const activityDots = buildActivityDots(activity_streak_days);
+  const activityStreakLabel = formatActivityStreakLabel(activity_streak_days);
 
   const svgWidth = 360;
   const svgHeight = 90;
   const padding = 15;
 
+  const hasSharedReadiness = currentReadiness !== null
+    && currentReadiness !== undefined
+    && Number.isFinite(Number(currentReadiness));
+  const latestTrajectoryScore = trajectory.length > 0
+    ? clampReadiness(trajectory[trajectory.length - 1].readiness)
+    : null;
+
+  // The shared readiness from the page is authoritative; the saved trajectory
+  // supplies the historical shape behind it.
+  const latestScore = hasSharedReadiness
+    ? clampReadiness(currentReadiness)
+    : latestTrajectoryScore;
+
   const points = trajectory.map((item, idx) => {
+    const readiness = idx === trajectory.length - 1 && latestScore !== null
+      ? latestScore
+      : clampReadiness(item.readiness);
     const x = padding + (idx / Math.max(1, trajectory.length - 1)) * (svgWidth - padding * 2);
-    const y = svgHeight - padding - (item.readiness / 100) * (svgHeight - padding * 2);
-    return { x, y, readiness: item.readiness, date: item.date };
+    const y = svgHeight - padding - (readiness / 100) * (svgHeight - padding * 2);
+    return { x, y, readiness, date: item.date };
   });
 
   const pathD = points.length > 0 ? `M ${points.map(p => `${p.x},${p.y}`).join(' L ')}` : '';
   const areaD = points.length > 0 ? `${pathD} L ${points[points.length - 1].x},${svgHeight} L ${points[0].x},${svgHeight} Z` : '';
-  const latestScore = trajectory[trajectory.length - 1]?.readiness || 78;
-  const initialScore = trajectory[0]?.readiness || 52;
-  const delta = latestScore - initialScore;
+  const initialScore = trajectory.length > 0 ? clampReadiness(trajectory[0].readiness) : latestScore;
+  const delta = latestScore !== null && initialScore !== null ? latestScore - initialScore : 0;
+  const deltaLabel = `${delta >= 0 ? '+' : ''}${delta}%`;
 
   return (
     <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
@@ -37,15 +62,15 @@ export default function ProgressTimelineWidget({ progressData }) {
 
         <div className="flex items-center space-x-1.5 bg-emerald-50 text-emerald-800 px-3 py-1 rounded-full border border-emerald-200 text-xs font-bold font-mono">
           <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
-          <span>+{delta}% Improvement</span>
+          <span>{deltaLabel} vs. Day 1</span>
         </div>
       </div>
 
       {/* Trajectory Sparkline Graph */}
       <div className="bg-canvas rounded-2.5xl p-4 border border-[#E2E2DE]">
         <div className="flex items-center justify-between text-xs mb-2">
-          <span className="font-bold text-obsidian text-sm">{latestScore}% Current Readiness</span>
-          <span className="text-[11px] text-subtle font-medium">{activity_streak_days} days of prep logged</span>
+          <span className="font-bold text-obsidian text-sm">{latestScore ?? '—'}% Current Readiness</span>
+          <span className="text-[11px] text-subtle font-medium">{activityStreakLabel}</span>
         </div>
 
         <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-20 overflow-visible">
@@ -66,7 +91,7 @@ export default function ProgressTimelineWidget({ progressData }) {
 
         <div className="flex justify-between text-[10px] text-subtle font-mono pt-1">
           <span>{trajectory[0]?.date || 'Day 1'}</span>
-          <span>Today ({latestScore}%)</span>
+          <span>Today ({latestScore ?? '—'}%)</span>
         </div>
       </div>
 
@@ -82,10 +107,10 @@ export default function ProgressTimelineWidget({ progressData }) {
           </div>
 
           <div className="grid grid-cols-7 gap-1 pt-0.5">
-            {Array.from({ length: 14 }).map((_, i) => (
+            {activityDots.map((dot) => (
               <span
-                key={i}
-                className={`w-3 h-3 rounded-full ${i < activity_streak_days + 3 ? 'bg-terracotta-500' : 'bg-[#DCDCD8]'}`}
+                key={dot.index}
+                className={`w-3 h-3 rounded-full ${dot.isActive ? 'bg-terracotta-500' : 'bg-[#DCDCD8]'}`}
               ></span>
             ))}
           </div>

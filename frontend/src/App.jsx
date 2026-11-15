@@ -2,13 +2,11 @@ import React, { useState } from 'react';
 import Navbar from './components/Navbar';
 import StudentPortal from './components/StudentPortal';
 import AdminPortal from './components/AdminPortal';
-import ReasoningTrace from './components/ReasoningTrace';
 import { Lock, X } from 'lucide-react';
 import { apiClient } from './api/client';
 
 export default function App() {
   const [activePortal, setActivePortal] = useState('student');
-  const [isResettingWorkspace, setIsResettingWorkspace] = useState(false);
   
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => {
     try {
@@ -25,31 +23,6 @@ export default function App() {
   const [adminPin, setAdminPin] = useState("");
   const [authError, setAuthError] = useState("");
 
-  const [executionSteps, setExecutionSteps] = useState([
-    { step: "System Initialized", duration_ms: 12.4, status: "success", output_summary: "Ready for student sessions" },
-    { step: "Privacy Protection Active", duration_ms: 2.1, status: "success", output_summary: "Personal details hidden" },
-    { step: "College Rules Loaded", duration_ms: 1.8, status: "success", output_summary: "Eligibility rules ready" }
-  ]);
-  const [totalLatency, setTotalLatency] = useState(16.3);
-
-  const handleExecutionUpdate = (steps, latency) => {
-    setExecutionSteps(steps);
-    setTotalLatency(latency);
-  };
-
-  const addTrace = (message, type = 'info') => {
-    const timeStr = new Date().toTimeString().split(' ')[0];
-    setExecutionSteps(prev => [
-      {
-        step: message,
-        duration_ms: Math.floor(Math.random() * 35) + 12,
-        status: type === 'error' ? 'error' : 'success',
-        output_summary: `Time: ${timeStr}`
-      },
-      ...prev
-    ]);
-  };
-
   const handleAdminLogin = async (e) => {
     e.preventDefault();
     try {
@@ -61,7 +34,6 @@ export default function App() {
       setActivePortal('admin');
       setAuthError("");
       setAdminPin("");
-      addTrace("Admin authenticated via secure session.");
     } catch (err) {
       setAuthError(err.message || "Incorrect password. Access denied.");
     }
@@ -75,27 +47,6 @@ export default function App() {
     }
     setIsAdminLoggedIn(false);
     setActivePortal('student');
-    addTrace("Admin session cleared. Logged out.");
-  };
-
-  // Sprint 3: Reset Workspace Handler
-  const handleResetWorkspace = async () => {
-    if (!window.confirm("Reset demo workspace? This will purge uploaded resumes and restore Priya, Rahul, and Amit to baseline states.")) {
-      return;
-    }
-
-    setIsResettingWorkspace(true);
-    addTrace?.("Resetting demo workspace to baseline seed state...");
-
-    try {
-      await apiClient.resetWorkspace();
-      addTrace?.("Demo workspace successfully reset.");
-      window.location.reload();
-    } catch (err) {
-      alert(`Reset failed: ${err.message}`);
-    } finally {
-      setIsResettingWorkspace(false);
-    }
   };
 
   return (
@@ -106,26 +57,15 @@ export default function App() {
         setIsAdminAuthModalOpen={setIsAdminAuthModalOpen}
         isAdminLoggedIn={isAdminLoggedIn}
         onAdminLogout={handleAdminLogout}
-        onResetWorkspace={handleResetWorkspace}
-        isResettingWorkspace={isResettingWorkspace}
-        traceCount={executionSteps.length}
       />
 
-      <main className="flex-1 pb-16">
+      <main className="flex-1 pb-16 overflow-x-clip">
         {activePortal === 'student' ? (
-          <StudentPortal
-            addTrace={addTrace}
-            onExecutionUpdate={handleExecutionUpdate}
-          />
+          <StudentPortal />
         ) : (
-          <AdminPortal addTrace={addTrace} />
+          <AdminPortal isAdminLoggedIn={isAdminLoggedIn} />
         )}
       </main>
-
-      <ReasoningTrace
-        executionSteps={executionSteps}
-        totalLatency={totalLatency}
-      />
 
       {/* Admin Login Modal */}
       {isAdminAuthModalOpen && (

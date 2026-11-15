@@ -97,6 +97,17 @@ export const apiClient = {
     return res.json();
   },
 
+  async getStudentProfile(studentId) {
+    const res = await fetch(`${API_BASE}/students/me/profile?student_id=${encodeURIComponent(studentId)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const error = new Error(err.detail || 'Failed to load student profile.');
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  },
+
   async getRankedJobs(studentId) {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/ranked-jobs`);
     if (!res.ok) {

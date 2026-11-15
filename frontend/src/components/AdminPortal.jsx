@@ -1,13 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useReducer } from 'react';
 import { 
   Users, CheckCircle2, XCircle, AlertTriangle, Download, 
-  BarChart3, Clock, Search, Sparkles, Filter, Briefcase, MapPin
+  BarChart3, Clock, Search, Sparkles, Filter, Briefcase, MapPin,
+  RotateCcw, ShieldAlert
 } from 'lucide-react';
 import { DEMO_PROFILES } from '../data/seedData';
 import { apiClient } from '../api/client';
 import RemediationWorkshopModal from './RemediationWorkshopModal';
+import InlineFeedback from './InlineFeedback';
+import { createErrorFeedback, createSuccessFeedback } from '../utils/feedback';
+import {
+  RESET_STATUS,
+  canResetWorkspace,
+  createResetState,
+  resetWorkspaceReducer
+} from '../utils/workspaceReset';
 
-export default function AdminPortal({ addTrace }) {
+export default function AdminPortal({ isAdminLoggedIn = false }) {
   const [students, setStudents] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
@@ -16,6 +25,14 @@ export default function AdminPortal({ addTrace }) {
   const [isSyllabusModalOpen, setIsSyllabusModalOpen] = useState(false);
   const [generatedSyllabus, setGeneratedSyllabus] = useState(null);
   const [isGeneratingSyllabus, setIsGeneratingSyllabus] = useState(false);
+  const [resetState, dispatchReset] = useReducer(resetWorkspaceReducer, undefined, createResetState);
+  const [adminFeedback, setAdminFeedback] = useState(null);
+
+  // Reset is destructive and requires an authenticated administrator session.
+  const resetAvailable = canResetWorkspace({
+    isAdminLoggedIn,
+    hasAdminToken: Boolean(apiClient.getAdminToken())
+  });
 
   const fetchAdminData = () => {
     // 1. Fetch Students with Preferences
@@ -35,20 +52,30 @@ export default function AdminPortal({ addTrace }) {
 
   const handleToggleStatus = async (id, newStatus) => {
     const previous = [...students];
+    setAdminFeedback(null);
     setStudents(prev => prev.map(s => s.id === id ? { ...s, adminStatus: newStatus, admin_status: newStatus } : s));
 
     try {
       await apiClient.updateStudentStatus(id, newStatus);
-      addTrace?.(`[ADMIN GATE]: Confirmed status change for candidate ${id} -> ${newStatus}`);
+      setAdminFeedback(createSuccessFeedback(
+        "Candidate status updated",
+        `Candidate ${id} is now ${newStatus}.`
+      ));
     } catch (err) {
       setStudents(previous);
-      alert(`Server rejected status update: ${err.message}`);
+      setAdminFeedback({
+        ...createErrorFeedback("Status update rejected", err, {
+          fallback: "The server rejected this status change."
+        }),
+        retry: () => handleToggleStatus(id, newStatus)
+      });
     }
   };
 
   const handleExportCSV = async () => {
+    setAdminFeedback(null);
+
     try {
-      addTrace?.("[EXPORT]: Requesting verified cohort CSV from server...");
       const res = await fetch(apiClient.getExportCSVUrl(), {
         headers: apiClient.getAdminHeaders()
       });
@@ -62,15 +89,24 @@ export default function AdminPortal({ addTrace }) {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      setAdminFeedback(createSuccessFeedback(
+        "Verified batch exported",
+        "The verified cohort CSV has been downloaded."
+      ));
     } catch (err) {
-      alert(`Failed to export CSV: ${err.message}`);
+      setAdminFeedback({
+        ...createErrorFeedback("Could not export CSV", err, {
+          fallback: "The verified batch could not be exported."
+        }),
+        retry: () => handleExportCSV()
+      });
     }
   };
 
   // Phase 4: 1-Click Remediation Generator
   const handleGenerateWorkshop = async () => {
     setIsGeneratingSyllabus(true);
-    addTrace?.("[REMEDIATION]: Synthesizing 3-day training syllabus for cohort gaps...");
+    setAdminFeedback(null);
 
     try {
       const data = await apiClient.generateRemediationSyllabus([
@@ -80,11 +116,36 @@ export default function AdminPortal({ addTrace }) {
       ]);
       setGeneratedSyllabus(data);
       setIsSyllabusModalOpen(true);
-      addTrace?.(`[REMEDIATION READY]: Generated "${data.bootcamp_title}".`);
     } catch (err) {
-      alert(`Syllabus generation failed: ${err.message}`);
+      setAdminFeedback({
+        ...createErrorFeedback("Syllabus generation failed", err, {
+          fallback: "The remediation syllabus could not be generated."
+        }),
+        retry: () => handleGenerateWorkshop()
+      });
     } finally {
       setIsGeneratingSyllabus(false);
+    }
+  };
+
+  // Sprint 3: Reset Workspace (administrator only)
+  const handleRequestReset = () => {
+    dispatchReset({ type: 'REQUEST_CONFIRMATION' });
+  };
+
+  const handleCancelReset = () => {
+    dispatchReset({ type: 'CANCEL' });
+  };
+
+  const handleConfirmReset = async () => {
+    dispatchReset({ type: 'CONFIRM' });
+
+    try {
+      await apiClient.resetWorkspace();
+      dispatchReset({ type: 'SUCCESS' });
+      window.location.reload();
+    } catch (err) {
+      dispatchReset({ type: 'FAILURE', error: err });
     }
   };
 
@@ -144,6 +205,16 @@ export default function AdminPortal({ addTrace }) {
           </button>
         </div>
       </div>
+
+      {adminFeedback && (
+        <InlineFeedback
+          variant={adminFeedback.variant}
+          title={adminFeedback.title}
+          message={adminFeedback.message}
+          onRetry={adminFeedback.retry}
+          onDismiss={adminFeedback.variant === 'error' ? undefined : () => setAdminFeedback(null)}
+        />
+      )}
 
       {/* Cohort Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
@@ -377,6 +448,97 @@ export default function AdminPortal({ addTrace }) {
           </table>
         </div>
       </div>
+
+      {/* Demo Workspace Maintenance — authenticated administrators only */}
+      {resetAvailable && (
+        <div className="bg-surface rounded-3xl border border-[#E6E6E3] shadow-xs p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start space-x-3">
+              <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-obsidian text-base">Reset Demo Workspace</h3>
+                <p className="text-xs text-subtle mt-1 max-w-xl leading-relaxed">
+                  Restores Priya, Rahul, and Amit to their baseline seed states, and clears uploaded
+                  resumes, applications, and milestone progress. Requires an authenticated
+                  placement-officer session.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-stretch sm:items-end gap-2 shrink-0">
+              <button
+                onClick={handleRequestReset}
+                disabled={resetState.status === RESET_STATUS.RESETTING}
+                className="px-4 py-2 rounded-full bg-surface hover:bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-xs disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${resetState.status === RESET_STATUS.RESETTING ? 'animate-spin' : ''}`} />
+                <span>{resetState.status === RESET_STATUS.RESETTING ? "Resetting workspace..." : "Reset Workspace"}</span>
+              </button>
+              {resetState.status === RESET_STATUS.SUCCESS && (
+                <span role="status" className="text-[11px] font-semibold text-emerald-700 text-center sm:text-right">
+                  Workspace restored. Reloading...
+                </span>
+              )}
+            </div>
+          </div>
+
+          {resetState.status === RESET_STATUS.ERROR && (
+            <div role="alert" className="mt-4 rounded-2xl bg-rose-50/80 border border-rose-200 p-3.5 text-rose-900">
+              <p className="text-xs font-bold">Workspace reset failed</p>
+              <p className="text-[11px] text-rose-800 leading-relaxed font-medium mt-0.5">{resetState.error}</p>
+              <p className="text-[11px] text-rose-800 leading-relaxed font-medium mt-1">
+                The reset did not complete. You can safely try again.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Reset confirmation modal */}
+      {resetState.status === RESET_STATUS.CONFIRMING && (
+        <div className="fixed inset-0 z-50 bg-obsidian/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-workspace-title"
+            aria-describedby="reset-workspace-description"
+            className="bg-surface rounded-3xl max-w-md w-full p-6 shadow-2xl border border-[#E0E0DC] space-y-4"
+          >
+            <div className="w-10 h-10 rounded-2xl bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 id="reset-workspace-title" className="font-bold text-obsidian text-base">
+                Reset demo workspace?
+              </h3>
+              <p id="reset-workspace-description" className="text-xs text-subtle mt-1 leading-relaxed">
+                This purges uploaded resumes and applications, and restores Priya, Rahul, and Amit to
+                their baseline seed states. Milestone progress and readiness are recalculated from
+                scratch. This cannot be undone.
+              </p>
+            </div>
+            <div className="flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={handleCancelReset}
+                autoFocus
+                className="px-4 py-2 rounded-full bg-surface hover:bg-cardMuted border border-[#E2E2DE] text-xs font-semibold text-obsidian transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReset}
+                className="px-4 py-2 rounded-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-xs"
+              >
+                Yes, reset workspace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Remediation Syllabus Modal */}
       {isSyllabusModalOpen && (

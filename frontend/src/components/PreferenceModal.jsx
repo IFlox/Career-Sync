@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { X, Sliders, Check, Clock, Briefcase, MapPin, Code2 } from 'lucide-react';
+import InlineFeedback from './InlineFeedback';
+import { getErrorMessage } from '../utils/feedback';
 
 const ROLES_OPTIONS = [
   "AI Systems & RAG Engineer",
@@ -22,6 +24,7 @@ export default function PreferenceModal({ preferences, onSave, onClose }) {
     available_hours_per_week: preferences?.available_hours_per_week || 10
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   const toggleArrayItem = (key, item) => {
     setForm(prev => {
@@ -33,10 +36,13 @@ export default function PreferenceModal({ preferences, onSave, onClose }) {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    setSaveError(null);
     setIsSaving(true);
     try {
       await onSave(form);
       onClose();
+    } catch (err) {
+      setSaveError(getErrorMessage(err, "Could not save preferences. Please try again."));
     } finally {
       setIsSaving(false);
     }
@@ -176,6 +182,14 @@ export default function PreferenceModal({ preferences, onSave, onClose }) {
           </div>
 
           {/* Modal Actions */}
+          {saveError && (
+            <InlineFeedback
+              variant="error"
+              title="Could not save preferences"
+              message={saveError}
+            />
+          )}
+
           <div className="pt-2 flex justify-end space-x-2">
             <button
               type="button"

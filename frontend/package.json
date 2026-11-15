@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/utils/readiness.test.js src/utils/milestoneReadiness.test.js src/utils/roadmapRecommendation.test.js src/utils/workspaceReset.test.js src/utils/activityStreak.test.js src/utils/feedback.test.js src/utils/jobRelevance.test.js src/utils/hiddenJobs.test.js src/utils/adaptiveInterview.test.js src/utils/applications.test.js src/utils/profileState.test.js src/utils/interviewSession.test.js src/utils/profileCandidates.test.js"
   },
   "keywords": [],
   "author": "IFlox",
