@@ -4,7 +4,7 @@ Enforces sovereign university placement rules deterministically.
 """
 import os
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 POLICY_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "university_policy.json")
 
@@ -26,7 +26,7 @@ class UniversityPolicyEngine:
             }
 
     @classmethod
-    def evaluate_eligibility(cls, student_cgpa: float, active_apps_count: int, job_tier: str) -> Dict[str, Any]:
+    def evaluate_eligibility(cls, student_cgpa: float, active_apps_count: int, job_tier: Optional[str] = None) -> Dict[str, Any]:
         policy = cls.load_policy()
         rules = policy.get("rules", {})
         violations = []

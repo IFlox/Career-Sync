@@ -5,7 +5,7 @@ import {
   buildActivityDots,
   formatActivityStreakLabel,
   normalizeActivityStreakDays
-} from './activityStreak.js';
+} from '../../src/utils/activityStreak.js';
 
 function activeCount(value) {
   return buildActivityDots(value).filter(dot => dot.isActive).length;

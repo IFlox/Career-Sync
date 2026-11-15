@@ -9,7 +9,7 @@ import {
   mergeAppliedJobIds,
   resolveApplicationActionState,
   restoreAppliedJobs
-} from './applications.js';
+} from '../../src/utils/applications.js';
 
 const JOBS = [
   {

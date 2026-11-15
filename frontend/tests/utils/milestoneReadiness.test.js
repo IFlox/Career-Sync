@@ -4,15 +4,15 @@ import {
   applyCompletedMilestonesToRoadmap,
   applyMilestoneToggleResult,
   normalizeCompletedMilestones
-} from './milestones.js';
+} from '../../src/utils/milestones.js';
 import {
   buildProfileReadiness,
   computeMilestoneCompletion
-} from './readiness.js';
+} from '../../src/utils/readiness.js';
 import {
   resolveRoadmapRecommendation
-} from './roadmapRecommendation.js';
-import { getProfileState, updateProfileState } from './profileState.js';
+} from '../../src/utils/roadmapRecommendation.js';
+import { getProfileState, updateProfileState } from '../../src/utils/profileState.js';
 
 const ROADMAP = [
   { week: 1, skill: 'System Design', is_completed: false },

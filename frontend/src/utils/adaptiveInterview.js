@@ -1,19 +1,15 @@
 /**
  * Adaptive interview question selection.
  *
- * The backend endpoint returns the question closest to the requested
- * difficulty. Because that selection is deterministic, asking again for the
- * same skill and difficulty can return the exact question the student just
- * answered. These helpers keep the "next question" flow honest:
+ * Questions are generated at runtime by the AI provider. These helpers keep
+ * the "next question" flow honest:
  * - a genuinely different question is preferred,
- * - the request is retried once when the backend repeats itself,
- * - the existing frontend question bank is used as a bounded fallback,
- * - and state changes only advance the counter once a question is ready.
+ * - the request is retried once when the provider repeats itself,
+ * - and no seeded question bank is used as fallback. If generation fails, the
+ *   caller surfaces the explicit unavailable error instead.
  */
 
-import { MOCK_INTERVIEW_QUESTIONS } from '../data/seedData.js';
-
-export const QUESTION_LOAD_ERROR = 'We could not load the next adaptive question. Please retry.';
+export const QUESTION_LOAD_ERROR = 'AI interview question generation is unavailable right now. Please retry.';
 
 export function normalizeQuestionText(text) {
   if (typeof text !== 'string') return '';
@@ -28,15 +24,18 @@ export function normalizeQuestion(raw) {
 
   const keywords = Array.isArray(raw.keywords)
     ? raw.keywords
-    : Array.isArray(raw.idealKeywords)
-      ? raw.idealKeywords
-      : [];
+    : Array.isArray(raw.expected_keywords)
+      ? raw.expected_keywords
+      : Array.isArray(raw.idealKeywords)
+        ? raw.idealKeywords
+        : [];
 
   return {
     ...raw,
     question,
     level: raw.level || 'Adaptive',
     keywords,
+    expected_keywords: Array.isArray(raw.expected_keywords) ? raw.expected_keywords : keywords,
     difficulty: Number.isFinite(Number(raw.difficulty)) ? Number(raw.difficulty) : undefined
   };
 }
@@ -51,43 +50,18 @@ export function isSameQuestion(first, second) {
 }
 
 /**
- * Picks the closest-difficulty question from the existing frontend bank that
- * is not the question currently on screen. Returns null when the bank has no
- * alternative for this skill.
- */
-export function findAlternativeQuestion(bank, skill, difficulty, currentQuestion) {
-  const entries = bank?.[skill];
-  if (!Array.isArray(entries) || entries.length === 0) return null;
-
-  const candidates = entries
-    .map(normalizeQuestion)
-    .filter(Boolean)
-    .filter(question => !isSameQuestion(question, currentQuestion));
-
-  if (candidates.length === 0) return null;
-
-  const target = Math.max(1, Math.min(10, Number(difficulty) || 6));
-  return candidates.reduce((best, candidate) => {
-    const bestDistance = Math.abs((best.difficulty ?? target) - target);
-    const candidateDistance = Math.abs((candidate.difficulty ?? target) - target);
-    return candidateDistance < bestDistance ? candidate : best;
-  });
-}
-
-/**
- * Loads the next question. Retries once on a repeated question, then falls
- * back to the local question bank when it has an alternative. The retry count
- * is bounded so a deterministic endpoint cannot cause an infinite loop.
+ * Loads the next runtime-generated question. Retries once when the provider
+ * repeats the current question, then keeps that response and flags it. There
+ * is no local/seeded fallback; transport or validation failures reject with the
+ * provider's unavailable error.
  *
- * Resolves with { question, attempts, usedFallback, sameQuestion }. Throws only
- * when loading failed and no local alternative exists.
+ * Resolves with { question, attempts, usedFallback, sameQuestion }.
  */
 export async function loadNextAdaptiveQuestion({
   skill,
   difficulty,
   currentQuestion,
   fetchQuestion,
-  bank = MOCK_INTERVIEW_QUESTIONS,
   maxRetries = 1
 }) {
   if (typeof fetchQuestion !== 'function') {
@@ -116,16 +90,6 @@ export async function loadNextAdaptiveQuestion({
       // Do not hammer a failing endpoint; surface the error after one try.
       break;
     }
-  }
-
-  const alternative = findAlternativeQuestion(bank, skill, difficulty, currentQuestion);
-  if (alternative) {
-    return {
-      question: alternative,
-      attempts: lastError ? 1 : attemptsAllowed + 1,
-      usedFallback: true,
-      sameQuestion: false
-    };
   }
 
   if (lastError) throw lastError;

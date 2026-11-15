@@ -123,7 +123,7 @@ export function resolveApplicationActionState({
   if (isCgpaBlocked) {
     return { disabled: true, label: 'Restricted by CGPA', tone: 'blocked' };
   }
-  return { disabled: false, label: 'Enroll for Campus Drive', tone: 'ready' };
+  return { disabled: false, label: 'Apply to Live Listing', tone: 'ready' };
 }
 
 export function isDuplicateApplicationError(error) {

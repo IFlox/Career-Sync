@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useReducer } from 'react';
+import React, { useState, useEffect, useReducer, useRef } from 'react';
 import { 
   Users, CheckCircle2, XCircle, AlertTriangle, Download, 
   BarChart3, Clock, Search, Sparkles, Filter, Briefcase, MapPin,
-  RotateCcw, ShieldAlert
+  RotateCcw, ShieldAlert, RefreshCw
 } from 'lucide-react';
 import { DEMO_PROFILES } from '../data/seedData';
 import { apiClient } from '../api/client';
@@ -22,11 +22,15 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [intentAnalytics, setIntentAnalytics] = useState(null);
+  const [overviewAnalytics, setOverviewAnalytics] = useState(null);
+  const [overviewStatus, setOverviewStatus] = useState("loading");
   const [isSyllabusModalOpen, setIsSyllabusModalOpen] = useState(false);
   const [generatedSyllabus, setGeneratedSyllabus] = useState(null);
   const [isGeneratingSyllabus, setIsGeneratingSyllabus] = useState(false);
   const [resetState, dispatchReset] = useReducer(resetWorkspaceReducer, undefined, createResetState);
   const [adminFeedback, setAdminFeedback] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshInFlight = useRef(false);
 
   // Reset is destructive and requires an authenticated administrator session.
   const resetAvailable = canResetWorkspace({
@@ -34,16 +38,58 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
     hasAdminToken: Boolean(apiClient.getAdminToken())
   });
 
-  const fetchAdminData = () => {
-    // 1. Fetch Students with Preferences
-    apiClient.getVerificationMatrix()
-      .then(data => setStudents(data.students || []))
-      .catch(() => setStudents(DEMO_PROFILES));
+  const fetchAdminData = async ({ reportErrors = false } = {}) => {
+    // A second request while one is already running is ignored.
+    if (refreshInFlight.current) return false;
+    refreshInFlight.current = true;
+    setIsRefreshing(true);
 
-    // 2. Fetch Intent Analytics
-    apiClient.getIntentAnalytics()
-      .then(data => setIntentAnalytics(data))
-      .catch(() => {});
+    const hadOverview = Boolean(overviewAnalytics);
+
+    const matrixTask = apiClient.getVerificationMatrix()
+      .then(data => setStudents(data.students || []));
+
+    const intentTask = apiClient.getIntentAnalytics()
+      .then(data => setIntentAnalytics(data));
+
+    const overviewTask = apiClient.getAnalyticsOverview()
+      .then(data => {
+        setOverviewAnalytics(data);
+        setOverviewStatus("ready");
+      });
+
+    let results;
+    try {
+      results = await Promise.allSettled([matrixTask, intentTask, overviewTask]);
+    } finally {
+      refreshInFlight.current = false;
+      setIsRefreshing(false);
+    }
+
+    const [matrixResult, intentResult, overviewResult] = results;
+
+    // Failure keeps the last valid data; the demo matrix fallback only applies
+    // when the portal has no student rows to preserve.
+    if (matrixResult.status === "rejected") {
+      setStudents(prev => (prev.length > 0 ? prev : DEMO_PROFILES));
+    }
+    // Intent analytics intentionally keeps its previous value on failure.
+
+    if (overviewResult.status === "rejected" && !hadOverview) {
+      setOverviewStatus("error");
+    }
+
+    const failures = results.filter(result => result.status === "rejected");
+    if (reportErrors && failures.length > 0) {
+      setAdminFeedback({
+        ...createErrorFeedback("Analytics refresh failed", failures[0].reason, {
+          fallback: "Live analytics could not be refreshed. Showing the last loaded values."
+        }),
+        retry: () => fetchAdminData({ reportErrors: true })
+      });
+    }
+
+    return failures.length === 0;
   };
 
   useEffect(() => {
@@ -57,10 +103,6 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
 
     try {
       await apiClient.updateStudentStatus(id, newStatus);
-      setAdminFeedback(createSuccessFeedback(
-        "Candidate status updated",
-        `Candidate ${id} is now ${newStatus}.`
-      ));
     } catch (err) {
       setStudents(previous);
       setAdminFeedback({
@@ -69,7 +111,15 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
         }),
         retry: () => handleToggleStatus(id, newStatus)
       });
+      return;
     }
+
+    setAdminFeedback(createSuccessFeedback(
+      "Candidate status updated",
+      `Candidate ${id} is now ${newStatus}.`
+    ));
+    // Only refresh after the status change was accepted by the server.
+    await fetchAdminData({ reportErrors: true });
   };
 
   const handleExportCSV = async () => {
@@ -161,11 +211,22 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
     return matchesSearch && matchesStatus && matchesRole;
   });
 
-  const avgScore = students.length > 0
-    ? Math.round(students.reduce((acc, s) => acc + (s.qualityScore || s.quality_score || 70), 0) / students.length)
-    : 75;
-  const highRiskCount = students.filter(s => (s.cgpa || 0) < 6.0 || (s.qualityScore || s.quality_score || 0) < 45).length;
-  const approvedCount = students.filter(s => (s.adminStatus || s.admin_status) === "Approved").length;
+  const overviewReady = overviewStatus === "ready" && Boolean(overviewAnalytics);
+  const hasAverageScore = overviewReady
+    && overviewAnalytics.average_quality_score !== null
+    && overviewAnalytics.average_quality_score !== undefined;
+  const missingSkills = overviewAnalytics?.batch_missing_skills || [];
+  const skillDataCoverage = (
+    overviewReady
+    && overviewAnalytics.skill_data_coverage_percentage !== null
+    && overviewAnalytics.skill_data_coverage_percentage !== undefined
+  )
+    ? overviewAnalytics.skill_data_coverage_percentage
+    : null;
+  const hasSkillDataCoverage = skillDataCoverage !== null;
+  const hasInsufficientSkillData = overviewReady
+    && hasSkillDataCoverage
+    && skillDataCoverage === 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
@@ -186,6 +247,15 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
         </div>
 
         <div className="flex items-center space-x-2.5">
+          <button
+            onClick={() => fetchAdminData({ reportErrors: true })}
+            disabled={isRefreshing}
+            className="px-4 py-2.5 rounded-full bg-surface hover:bg-canvas text-obsidian border border-[#E0E0DC] font-bold text-xs flex items-center space-x-1.5 transition-all shadow-xs disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-terracotta-500 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>{isRefreshing ? "Refreshing..." : "Refresh Analytics"}</span>
+          </button>
+
           {/* Phase 4: 1-Click Bootcamp Generator Button */}
           <button
             onClick={handleGenerateWorkshop}
@@ -217,27 +287,67 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
       )}
 
       {/* Cohort Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-        <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs">
-          <span className="text-xs font-semibold text-subtle block">Average Student Score</span>
-          <div className="text-3xl font-black text-obsidian mt-1">{avgScore}%</div>
-          <p className="text-[11px] text-emerald-700 mt-1 font-medium">↑ 12% boost from AI preparation</p>
-        </div>
-
-        <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs">
-          <span className="text-xs font-semibold text-subtle block">Students Needing Help</span>
-          <div className="text-3xl font-black text-rose-600 mt-1">{highRiskCount}</div>
-          <p className="text-[11px] text-rose-700 mt-1 font-medium">CGPA &lt; 6.0 or low skill match</p>
-        </div>
-
-        <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs">
-          <span className="text-xs font-semibold text-subtle block">Approved for Companies</span>
-          <div className="text-3xl font-black text-obsidian mt-1">
-            {approvedCount} <span className="text-xs font-normal text-subtle">/ {students.length}</span>
+      {overviewStatus === "error" ? (
+        <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs flex items-start space-x-3">
+          <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 border border-rose-200 flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-5 h-5" />
           </div>
-          <p className="text-[11px] text-subtle mt-1">Ready for recruiter distribution</p>
+          <div>
+            <p className="text-sm font-bold text-obsidian">Live analytics unavailable</p>
+            <p className="text-xs text-subtle mt-1 leading-relaxed">
+              The live cohort summary could not be loaded, so no estimated figures are shown.
+              The student matrix below is unaffected.
+            </p>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs">
+            <span className="text-xs font-semibold text-subtle block">Average Student Score</span>
+            <div className="text-3xl font-black text-obsidian mt-1">
+              {!overviewReady ? (
+                <span className="text-sm font-bold text-subtle">Loading live analytics...</span>
+              ) : hasAverageScore ? (
+                `${overviewAnalytics.average_quality_score}%`
+              ) : (
+                <span className="text-sm font-bold text-subtle">Unavailable</span>
+              )}
+            </div>
+            <p className="text-[11px] text-subtle mt-1 font-medium">
+              {!overviewReady
+                ? "Fetching the live cohort summary"
+                : hasAverageScore
+                  ? `Live average across ${overviewAnalytics.cohort_size} candidates`
+                  : "No candidate has a recorded quality score yet"}
+            </p>
+          </div>
+
+          <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs">
+            <span className="text-xs font-semibold text-subtle block">Students Needing Help</span>
+            <div className="text-3xl font-black text-rose-600 mt-1">
+              {overviewReady
+                ? overviewAnalytics.high_risk_count
+                : <span className="text-sm font-bold text-subtle">Loading live analytics...</span>}
+            </div>
+            <p className="text-[11px] text-rose-700 mt-1 font-medium">CGPA &lt; 6.0 or low skill match</p>
+          </div>
+
+          <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs">
+            <span className="text-xs font-semibold text-subtle block">Approved for Companies</span>
+            <div className="text-3xl font-black text-obsidian mt-1">
+              {overviewReady
+                ? (
+                  <>
+                    {overviewAnalytics.approved_count}{" "}
+                    <span className="text-xs font-normal text-subtle">/ {overviewAnalytics.cohort_size}</span>
+                  </>
+                )
+                : <span className="text-sm font-bold text-subtle">Loading live analytics...</span>}
+            </div>
+            <p className="text-[11px] text-subtle mt-1">Ready for recruiter distribution</p>
+          </div>
+        </div>
+      )}
 
       {/* Phase 4: Student Intent Analytics & Demand Mismatch */}
       {intentAnalytics && (
@@ -276,34 +386,87 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
 
       {/* Cohort Missing Skills Chart */}
       <div className="bg-surface p-6 rounded-3xl border border-[#E6E6E3] shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <BarChart3 className="w-5 h-5 text-terracotta-500" />
-            <h3 className="font-bold text-obsidian text-base">Most Common Skill Gaps Across Students</h3>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start space-x-2">
+            <BarChart3 className="w-5 h-5 text-terracotta-500 mt-0.5" />
+            <div>
+              <h3 className="font-bold text-obsidian text-base">Skills Missing Across Live Job Listings</h3>
+              <p className="text-[11px] text-subtle mt-0.5 leading-relaxed">
+                Based on skills detected in current live job titles, descriptions, and tags
+              </p>
+            </div>
           </div>
-          <span className="text-xs text-subtle">Aggregated from active job targets</span>
+          {overviewReady && hasSkillDataCoverage && !hasInsufficientSkillData && (
+            <span className="text-xs font-semibold text-obsidian bg-canvas border border-[#E0E0DC] rounded-full px-3 py-1 whitespace-nowrap">
+              {skillDataCoverage}% skill data coverage
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="rounded-2xl bg-canvas border border-[#ECECE9] px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-subtle font-semibold">Live jobs analysed</p>
+            <p className="text-sm font-bold text-obsidian font-mono">
+              {overviewReady ? overviewAnalytics.live_job_count : "—"}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-canvas border border-[#ECECE9] px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-subtle font-semibold">Jobs with skill data</p>
+            <p className="text-sm font-bold text-obsidian font-mono">
+              {overviewReady ? overviewAnalytics.jobs_with_skill_data : "—"}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-canvas border border-[#ECECE9] px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-subtle font-semibold">Skill data coverage</p>
+            <p className="text-sm font-bold text-obsidian font-mono">
+              {hasSkillDataCoverage ? `${skillDataCoverage}%` : "—"}
+            </p>
+          </div>
         </div>
 
         <div className="space-y-3 pt-2">
-          {[
-            { skill: "Docker & Containerization", pct: 67 },
-            { skill: "System Design & Caching", pct: 54 },
-            { skill: "RAG & Vector Retrieval", pct: 48 },
-            { skill: "Kubernetes Orchestration", pct: 40 }
-          ].map((bar, idx) => (
-            <div key={idx} className="space-y-1">
-              <div className="flex justify-between text-xs font-semibold text-obsidian">
-                <span>{bar.skill}</span>
-                <span className="text-subtle font-mono">{bar.pct}% of batch missing</span>
-              </div>
-              <div className="w-full h-3 bg-canvas rounded-full overflow-hidden border border-[#E0E0DC]">
-                <div
-                  className="h-full bg-terracotta-500 rounded-full transition-all duration-500"
-                  style={{ width: `${bar.pct}%` }}
-                ></div>
-              </div>
+          {hasInsufficientSkillData ? (
+            <div className="rounded-2xl border border-dashed border-[#E0E0DC] bg-canvas px-4 py-6 text-center">
+              <AlertTriangle className="w-5 h-5 text-subtle mx-auto mb-2" />
+              <p className="text-xs font-bold text-obsidian">Insufficient live skill data</p>
+              <p className="text-[11px] text-subtle mt-1 leading-relaxed">
+                Skills were detected in {overviewAnalytics.jobs_with_skill_data} of {overviewAnalytics.live_job_count} live listings, which is not enough to report reliable missing-skill percentages.
+              </p>
             </div>
-          ))}
+          ) : missingSkills.length > 0 ? (
+            missingSkills.map((bar) => (
+              <div key={bar.skill} className="space-y-1">
+                <div className="flex justify-between text-xs font-semibold text-obsidian">
+                  <span>{bar.skill}</span>
+                  <span className="text-subtle font-mono">{bar.missing_percentage}% of batch missing</span>
+                </div>
+                <div className="w-full h-3 bg-canvas rounded-full overflow-hidden border border-[#E0E0DC]">
+                  <div
+                    className="h-full bg-terracotta-500 rounded-full transition-all duration-500"
+                    style={{ width: `${bar.missing_percentage}%` }}
+                  ></div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-2xl border border-dashed border-[#E0E0DC] bg-canvas px-4 py-6 text-center">
+              <AlertTriangle className="w-5 h-5 text-subtle mx-auto mb-2" />
+              <p className="text-xs font-bold text-obsidian">
+                {overviewStatus === "error"
+                  ? "Live analytics unavailable"
+                  : overviewStatus === "ready"
+                    ? "No skill gaps to report"
+                    : "Loading live skill-gap data..."}
+              </p>
+              <p className="text-[11px] text-subtle mt-1 leading-relaxed">
+                {overviewStatus === "error"
+                  ? "We could not reach the live analytics service, so no skill-gap percentages are shown."
+                  : overviewStatus === "ready"
+                    ? "No missing skills were found in the current live listings for this cohort."
+                    : "Skill gaps are calculated from current live job listings."}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -368,9 +531,12 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
             <tbody className="divide-y divide-[#ECECE9]">
               {filteredStudents.map((student) => {
                 const status = student.adminStatus || student.admin_status || "Pending";
-                const score = student.qualityScore || student.quality_score || 70;
+                const rawScore = student.qualityScore ?? student.quality_score;
+                const hasScore = rawScore !== null && rawScore !== undefined && rawScore !== "";
+                const cgpaValue = student.cgpa;
+                const hasCgpa = cgpaValue !== null && cgpaValue !== undefined && cgpaValue !== "";
                 const isSlaEscalated = (student.slaHoursPending || student.sla_hours_pending || 0) > 48;
-                const isRestricted = (student.cgpa || 0) < 6.0;
+                const isRestricted = hasCgpa && Number(cgpaValue) < 6.0;
                 const pref = student.preferences || {};
                 const topRole = (pref.preferred_roles || [])[0] || "General Engineering";
                 const topLoc = (pref.preferred_locations || [])[0] || "Flexible";
@@ -386,7 +552,11 @@ export default function AdminPortal({ isAdminLoggedIn = false }) {
                       <span className="text-[10px] text-subtle">{student.branch}</span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="font-bold text-obsidian text-sm">{score}%</span>
+                      {hasScore ? (
+                        <span className="font-bold text-obsidian text-sm">{rawScore}%</span>
+                      ) : (
+                        <span className="text-[11px] font-semibold text-subtle">Unavailable</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 space-y-1">
                       <span className="font-bold text-obsidian block text-[11px] truncate max-w-[180px]">

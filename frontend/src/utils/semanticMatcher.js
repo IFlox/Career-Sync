@@ -124,7 +124,7 @@ export function evaluateJobMatch(candidate, targetJob, preferences = null, feedb
     missingSkills,
     isEligible,
     sopViolations,
-    tier: targetJob.tier || "Tier-2",
+    tier: targetJob.tier || null,
     fitReasons,
     cautionNotes,
     isSaved,

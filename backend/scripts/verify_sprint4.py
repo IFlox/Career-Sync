@@ -62,13 +62,13 @@ def run_tests():
     print(f"   Fit Explanation: {top_job['match_evaluation']['fit_reasons'][0]}")
 
     # -------------------------------------------------------------
-    # Test 4: Dynamic Roadmap Tailored to Active Role
+    # Test 4: Dynamic Roadmap Tailored to the Top Live Role
     # -------------------------------------------------------------
     print("\n[TEST 4] Testing Dynamic Role-Specific Roadmap Generation...")
-    res = client.get("/api/v1/students/roadmap/stud-01?job_id=job-backend")
+    res = client.get(f"/api/v1/students/roadmap/stud-01?job_id={top_job['id']}")
     assert res.status_code == 200
     roadmap_data = res.json()
-    assert roadmap_data["target_role"] == "Distributed Backend Developer"
+    assert roadmap_data["target_role"] == top_job["title"]
     assert len(roadmap_data["roadmap"]) == 4
     print(f"✓ PASS: Generated roadmap for '{roadmap_data['target_role']}' ({roadmap_data['learning_style']}).")
 
@@ -99,9 +99,9 @@ def run_tests():
     print("\n[TEST 6] Testing SOP Guardrail: CGPA < 6.0 Blocked from Tier-1...")
     amit_app = {
         "student_id": "stud-03",
-        "job_id": "job-ai-sys",
-        "job_title": "AI Systems & RAG Engineer",
-        "company": "Anthropic",
+        "job_id": "policy-tier1-guardrail-check",
+        "job_title": "Policy Guardrail Check",
+        "company": "Live listing",
         "tier": "Tier-1"
     }
     res = client.post("/api/v1/students/applications/submit", json=amit_app)
@@ -117,9 +117,9 @@ def run_tests():
     print("\n[TEST 7] Testing SOP Guardrail: Active Application Cap (Max 3)...")
     rahul_app = {
         "student_id": "stud-02",
-        "job_id": "job-backend",
-        "job_title": "Distributed Backend Developer",
-        "company": "Razorpay",
+        "job_id": "policy-application-cap-check",
+        "job_title": "Policy Application Cap Check",
+        "company": "Live listing",
         "tier": "Tier-2"
     }
     # Rahul has 2 active apps initially. Submit 1 -> reaches 3. Submit another -> blocked!

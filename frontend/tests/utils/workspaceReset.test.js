@@ -8,7 +8,7 @@ import {
   createResetState,
   normalizeResetError,
   resetWorkspaceReducer
-} from './workspaceReset.js';
+} from '../../src/utils/workspaceReset.js';
 
 function run(events, initial = createResetState()) {
   return events.reduce((state, event) => resetWorkspaceReducer(state, event), initial);

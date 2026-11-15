@@ -95,7 +95,7 @@ class SemanticMatchingEngine:
         is_eligible = True
         cand_cgpa = float(candidate.get("cgpa", 7.5))
         active_apps = int(candidate.get("active_apps_count", 0))
-        tier = target_job.get("tier", "Tier-2")
+        tier = target_job.get("tier")
 
         if tier == "Tier-1" and cand_cgpa < 6.0:
             is_eligible = False
@@ -138,7 +138,7 @@ class SemanticMatchingEngine:
         match_percentage = max(5, min(99, match_percentage))
 
         if not fit_reasons:
-            fit_reasons.append("Foundational technical overlap with campus requirements")
+            fit_reasons.append("Foundational technical overlap with this role")
 
         # Attach explicit provenance metadata
         candidate_data_mode = candidate.get("data_mode", "DEMO_DATA")
@@ -162,6 +162,10 @@ class SemanticMatchingEngine:
             "source_provenance": {
                 "candidate_mode": candidate_data_mode,
                 "job_mode": job_data_mode,
-                "job_source": target_job.get("source_label", "Curated Role")
+                "job_source": (
+                    target_job.get("source_name")
+                    or target_job.get("source_label")
+                    or "Live listing"
+                )
             }
         }

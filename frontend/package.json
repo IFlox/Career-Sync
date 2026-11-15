@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/utils/readiness.test.js src/utils/milestoneReadiness.test.js src/utils/roadmapRecommendation.test.js src/utils/workspaceReset.test.js src/utils/activityStreak.test.js src/utils/feedback.test.js src/utils/jobRelevance.test.js src/utils/hiddenJobs.test.js src/utils/adaptiveInterview.test.js src/utils/applications.test.js src/utils/profileState.test.js src/utils/interviewSession.test.js src/utils/profileCandidates.test.js"
+    "test": "node --test tests/utils/readiness.test.js tests/utils/milestoneReadiness.test.js tests/utils/roadmapRecommendation.test.js tests/utils/workspaceReset.test.js tests/utils/activityStreak.test.js tests/utils/feedback.test.js tests/utils/jobRelevance.test.js tests/utils/hiddenJobs.test.js tests/utils/adaptiveInterview.test.js tests/utils/interviewAnswer.test.js tests/utils/applications.test.js tests/utils/profileState.test.js tests/utils/interviewSession.test.js tests/utils/profileCandidates.test.js tests/utils/learningPlan.test.js tests/utils/liveJobs.test.js tests/api/client.test.js tests/components/AdminPortal.audit.test.js"
   },
   "keywords": [],
   "author": "IFlox",

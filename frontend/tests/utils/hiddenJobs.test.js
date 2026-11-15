@@ -8,13 +8,13 @@ import {
   resolveVisibleJobId,
   resolveVisibleJobState,
   rollbackHide
-} from './hiddenJobs.js';
+} from '../../src/utils/hiddenJobs.js';
 import {
   beginRequest,
   getProfileState,
   isLatestRequest,
   updateProfileState
-} from './profileState.js';
+} from '../../src/utils/profileState.js';
 
 const JOBS = [
   { id: 'job-a', title: 'Backend Engineer' },

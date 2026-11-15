@@ -238,7 +238,7 @@ class StudentRepository:
                 "active_apps_count": s.get("active_apps_count", 0),
                 "sla_hours_pending": s.get("sla_hours_pending", 0),
                 "admin_status": s.get("admin_status", "Pending"),
-                "target_role": s.get("target_role", "job-ai-sys"),
+                "target_role": s.get("target_role", ""),
                 "skills": json.dumps(s.get("skills", [])),
                 "raw_resume": s.get("raw_resume", ""),
                 "quality_score": s.get("quality_score", 75)
@@ -251,7 +251,10 @@ class StudentRepository:
             (:student_id, :preferred_roles, :preferred_locations, :preferred_industries, :target_technologies, :min_expected_ctc_lpa, :learning_style, :available_hours_per_week)
             """), {
                 "student_id": s["id"],
-                "preferred_roles": json.dumps([s.get("target_role", "job-ai-sys"), "Distributed Backend Developer"]),
+                "preferred_roles": json.dumps([
+                    role for role in [s.get("target_role"), "Distributed Backend Developer"]
+                    if role
+                ]),
                 "preferred_locations": json.dumps(["Bangalore", "Pune", "Remote"]),
                 "preferred_industries": json.dumps(["Enterprise AI", "FinTech", "SaaS"]),
                 "target_technologies": json.dumps(s.get("skills", [])[:4] or ["Python", "Docker"]),
@@ -336,7 +339,7 @@ class StudentRepository:
                 "active_apps_count": student_data.get("active_apps_count", 0),
                 "sla_hours_pending": student_data.get("sla_hours_pending", 1),
                 "admin_status": student_data.get("admin_status", "Pending"),
-                "target_role": student_data.get("target_role", "job-ai-sys"),
+                "target_role": student_data.get("target_role", ""),
                 "skills": skills_str,
                 "raw_resume": student_data.get("raw_resume", ""),
                 "quality_score": student_data.get("quality_score", 75)

@@ -37,8 +37,9 @@ export const apiClient = {
   },
 
   // Next Best Action
-  async getNextAction(studentId, jobId = "job-ai-sys") {
-    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/recommendations/next-action?job_id=${encodeURIComponent(jobId)}`);
+  async getNextAction(studentId, jobId = null) {
+    const query = jobId ? `?job_id=${encodeURIComponent(jobId)}` : '';
+    const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/recommendations/next-action${query}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Failed to load recommendation action.');
@@ -112,7 +113,7 @@ export const apiClient = {
     const res = await fetch(`${API_BASE}/students/${encodeURIComponent(studentId)}/ranked-jobs`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to load personalized job rankings.');
+      throw new Error(err.detail || 'Live job listings are unavailable right now. Please retry.');
     }
     return res.json();
   },
@@ -121,7 +122,7 @@ export const apiClient = {
     const res = await fetch(`${API_BASE}/students/jobs/live`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to load live job feed.');
+      throw new Error(err.detail || 'Live job listings are unavailable right now. Please retry.');
     }
     return res.json();
   },
@@ -148,11 +149,11 @@ export const apiClient = {
     return res.json();
   },
 
-  async processResume(rawText, targetJobId = 'job-ai-sys') {
+  async processResume(rawText, targetJobId = null) {
     const res = await fetch(`${API_BASE}/students/resume/process`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw_text: rawText, target_job_id: targetJobId }),
+      body: JSON.stringify({ raw_text: rawText, target_job_id: targetJobId || null }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -195,25 +196,40 @@ export const apiClient = {
     return res.json();
   },
 
-  async getRoadmap(studentId, jobId = "job-ai-sys") {
-    const res = await fetch(`${API_BASE}/students/roadmap/${encodeURIComponent(studentId)}?job_id=${encodeURIComponent(jobId)}`);
+  async getRoadmap(studentId, jobId = null) {
+    const query = jobId ? `?job_id=${encodeURIComponent(jobId)}` : '';
+    const res = await fetch(`${API_BASE}/students/roadmap/${encodeURIComponent(studentId)}${query}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to generate preparation roadmap.');
+      throw new Error(err.detail || 'AI learning roadmap generation is unavailable right now. Please retry.');
     }
     return res.json();
   },
 
-  async getInterviewQuestion(skill = 'RAG Pipelines', difficulty = 6) {
-    const res = await fetch(`${API_BASE}/students/interview/question?skill=${encodeURIComponent(skill)}&difficulty=${difficulty}`);
+  async getInterviewQuestion(skill = 'RAG Pipelines', difficulty = 6, targetRole = '', previousQuestion = '') {
+    const params = new URLSearchParams({
+      skill: skill || 'RAG Pipelines',
+      difficulty: String(difficulty ?? 6)
+    });
+    if (targetRole) params.set('target_role', targetRole);
+    if (previousQuestion) params.set('previous_question', previousQuestion);
+
+    const res = await fetch(`${API_BASE}/students/interview/question?${params.toString()}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Failed to fetch adaptive interview question.');
+      throw new Error(err.detail || 'AI interview question generation is unavailable right now. Please retry.');
     }
     return res.json();
   },
 
-  async submitInterviewAnswer(studentId, skill, answerText, currentDifficulty, questionText = "") {
+  async submitInterviewAnswer(
+    studentId,
+    skill,
+    answerText,
+    currentDifficulty,
+    questionText = "",
+    expectedKeywords = []
+  ) {
     const res = await fetch(`${API_BASE}/students/interview/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -221,6 +237,7 @@ export const apiClient = {
         student_id: studentId || "stud-01",
         skill,
         question_text: questionText,
+        expected_keywords: Array.isArray(expectedKeywords) ? expectedKeywords : [],
         answer_text: answerText,
         current_difficulty: currentDifficulty,
       }),
@@ -281,6 +298,17 @@ export const apiClient = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Failed to load student intent analytics.');
+    }
+    return res.json();
+  },
+
+  async getAnalyticsOverview() {
+    const res = await fetch(`${API_BASE}/admin/analytics/overview`, {
+      headers: this.getAdminHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to load cohort analytics overview.');
     }
     return res.json();
   },

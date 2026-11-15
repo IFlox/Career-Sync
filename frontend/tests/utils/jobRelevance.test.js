@@ -5,7 +5,7 @@ import {
   isTechnicalJob,
   resolveSelectedJobId,
   selectTechnicalJobs
-} from './jobRelevance.js';
+} from '../../src/utils/jobRelevance.js';
 
 test('technical roles are retained across engineering families', () => {
   const roles = [

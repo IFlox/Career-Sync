@@ -14,11 +14,17 @@ from dotenv import load_dotenv
 
 from database import StudentRepository, PreferenceRepository
 from services.ai_engine import CareerSyncAIEngine, AIProviderUnavailableError
+from services.live_jobs import LiveJobProvider, LiveJobsUnavailableError
+from services.matching_engine import SemanticMatchingEngine
 from services.admin_auth import ADMIN_PIN, create_admin_token, require_admin_configuration, verify_tpo_token
 
 load_dotenv()
 
 router = APIRouter(prefix="/admin", tags=["Placement Cell (TPO)"])
+
+LIVE_JOBS_UNAVAILABLE_DETAIL = (
+    "Live job listings are unavailable right now. Please retry."
+)
 
 class LoginRequest(BaseModel):
     pin: str = Field(..., min_length=1)
@@ -29,6 +35,93 @@ class StatusUpdateRequest(BaseModel):
 
 class RemediationSyllabusRequest(BaseModel):
     target_skills: List[str] = ["Docker & Containerization", "System Design", "RAG Pipelines"]
+
+
+def _live_jobs_or_503() -> List[dict]:
+    """Loads runtime live listings; a provider failure is an explicit 503."""
+    try:
+        return LiveJobProvider.get_jobs()
+    except LiveJobsUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=LIVE_JOBS_UNAVAILABLE_DETAIL
+        ) from exc
+
+
+def _compute_batch_missing_skills(students: List[dict], jobs: List[dict]) -> List[dict]:
+    """
+    Derives cohort skill gaps from live listings.
+
+    Each student counts at most once per skill, no matter how many live jobs
+    require it. Skills are reported with the canonical names supplied by
+    live_jobs.py and ranked by the number of students missing them.
+    """
+    if not students or not jobs:
+        return []
+
+    usable_jobs = [
+        job for job in jobs
+        if isinstance(job.get("required_skills"), list) and job["required_skills"]
+    ]
+    if not usable_jobs:
+        return []
+
+    total_students = len(students)
+    missing_counts: dict = {}
+    canonical_names: dict = {}
+
+    for student in students:
+        student_missing: dict = {}
+        for job in usable_jobs:
+            evaluation = SemanticMatchingEngine.evaluate(
+                candidate=student,
+                target_job=job
+            )
+            for skill in evaluation.get("missing_skills") or []:
+                name = str(skill).strip()
+                if not name:
+                    continue
+                key = name.lower()
+                student_missing.setdefault(key, name)
+
+        for key, name in student_missing.items():
+            missing_counts[key] = missing_counts.get(key, 0) + 1
+            canonical_names.setdefault(key, name)
+
+    if not missing_counts:
+        return []
+
+    ranked = sorted(
+        missing_counts.items(),
+        key=lambda item: (-item[1], canonical_names[item[0]].lower())
+    )
+
+    return [
+        {
+            "skill": canonical_names[key],
+            "missing_percentage": round((count / total_students) * 100)
+        }
+        for key, count in ranked[:4]
+    ]
+
+
+def _skill_data_summary(jobs: List[dict]) -> dict:
+    """Reports how many live listings actually carried skill data."""
+    live_job_count = len(jobs)
+    jobs_with_skill_data = sum(
+        1 for job in jobs
+        if isinstance(job.get("required_skills"), list) and job["required_skills"]
+    )
+    coverage_percentage = (
+        round((jobs_with_skill_data / live_job_count) * 100, 1)
+        if live_job_count
+        else 0
+    )
+    return {
+        "live_job_count": live_job_count,
+        "jobs_with_skill_data": jobs_with_skill_data,
+        "skill_data_coverage_percentage": coverage_percentage,
+    }
 
 
 @router.post("/auth/verify")
@@ -70,14 +163,8 @@ def get_cohort_intent_analytics(authorized: bool = Depends(verify_tpo_token)):
 
     return {
         "cohort_size": total,
-        "top_desired_roles": top_roles or [
-            {"role": "AI Systems & RAG Engineer", "student_count": 2, "percentage": 67},
-            {"role": "Distributed Backend Developer", "student_count": 2, "percentage": 67}
-        ],
-        "top_desired_locations": top_locations or [
-            {"location": "Bangalore", "student_count": 3, "percentage": 100},
-            {"location": "Remote", "student_count": 2, "percentage": 67}
-        ]
+        "top_desired_roles": top_roles,
+        "top_desired_locations": top_locations
     }
 
 
@@ -145,14 +232,50 @@ def generate_remediation_syllabus(payload: RemediationSyllabusRequest, authorize
     }
 
 
+def _numeric_quality_score(value) -> Optional[float]:
+    """Returns a real numeric quality score, or None when none was recorded."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
 @router.get("/analytics/overview")
 def get_cohort_overview(authorized: bool = Depends(verify_tpo_token)):
     students = StudentRepository.get_all()
     total = len(students)
-    avg_score = round(sum(s.get("quality_score", 70) for s in students) / max(1, total))
-    high_risk_count = sum(1 for s in students if (s.get("cgpa", 0) < 6.0) or (s.get("quality_score", 0) < 45))
+
+    scored_students = [
+        score for s in students
+        if (score := _numeric_quality_score(s.get("quality_score"))) is not None
+    ]
+    avg_score = round(sum(scored_students) / len(scored_students)) if scored_students else None
+
+    # Thresholds are unchanged. A missing score still counts toward high risk,
+    # matching the previous behavior of treating it as zero.
+    high_risk_count = sum(
+        1 for s in students
+        if (s.get("cgpa") or 0) < 6.0
+        or (_numeric_quality_score(s.get("quality_score")) or 0) < 45
+    )
     approved_count = sum(1 for s in students if s.get("admin_status") == "Approved")
-    sla_escalated = sum(1 for s in students if s.get("sla_hours_pending", 0) > 48)
+    sla_escalated = sum(1 for s in students if (s.get("sla_hours_pending") or 0) > 48)
+
+    if total:
+        jobs = _live_jobs_or_503()
+        skill_metadata = _skill_data_summary(jobs)
+        batch_missing_skills = (
+            _compute_batch_missing_skills(students, jobs)
+            if skill_metadata["jobs_with_skill_data"] > 0
+            else []
+        )
+    else:
+        # No students means the overview never consults the live provider.
+        skill_metadata = {
+            "live_job_count": 0,
+            "jobs_with_skill_data": 0,
+            "skill_data_coverage_percentage": 0,
+        }
+        batch_missing_skills = []
 
     return {
         "cohort_size": total,
@@ -160,12 +283,8 @@ def get_cohort_overview(authorized: bool = Depends(verify_tpo_token)):
         "high_risk_count": high_risk_count,
         "approved_count": approved_count,
         "sla_escalations_count": sla_escalated,
-        "batch_missing_skills": [
-            {"skill": "Docker & Containers", "missing_percentage": 67},
-            {"skill": "System Design", "missing_percentage": 54},
-            {"skill": "RAG Pipelines", "missing_percentage": 48},
-            {"skill": "Kubernetes", "missing_percentage": 40}
-        ]
+        **skill_metadata,
+        "batch_missing_skills": batch_missing_skills
     }
 
 

@@ -5,7 +5,7 @@ import {
   clampReadiness,
   computeOverallReadiness,
   syncNextActionReadiness
-} from './readiness.js';
+} from '../../src/utils/readiness.js';
 
 test('buildReadinessPayload uses the shared weighted formula', () => {
   const payload = buildReadinessPayload({

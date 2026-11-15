@@ -9,8 +9,8 @@ import {
   normalizeCandidateProfile,
   removeUploadedCandidateId,
   saveUploadedCandidateIds
-} from './profileCandidates.js';
-import { getProfileState, updateProfileState } from './profileState.js';
+} from '../../src/utils/profileCandidates.js';
+import { getProfileState, updateProfileState } from '../../src/utils/profileState.js';
 
 const DEMO = [
   { id: 'stud-01', name: 'Priya Sharma', branch: 'Computer Science & Engineering' },

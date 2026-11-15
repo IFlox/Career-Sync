@@ -15,7 +15,7 @@ import {
   createSuccessFeedback,
   formatSkillList,
   getErrorMessage
-} from './feedback.js';
+} from '../../src/utils/feedback.js';
 
 test('getErrorMessage preserves the real error message', () => {
   assert.equal(getErrorMessage(new Error('Upload processing error')), 'Upload processing error');

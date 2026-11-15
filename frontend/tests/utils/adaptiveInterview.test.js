@@ -5,11 +5,10 @@ import {
   beginNextQuestion,
   failNextQuestion,
   finishNextQuestion,
-  findAlternativeQuestion,
   isSameQuestion,
   loadNextAdaptiveQuestion,
   normalizeQuestion
-} from './adaptiveInterview.js';
+} from '../../src/utils/adaptiveInterview.js';
 
 const RAG_CURRENT = {
   id: 'rag-q1',
@@ -21,16 +20,13 @@ const RAG_CURRENT = {
 };
 
 const RAG_ALTERNATIVE = {
-  id: 'rag-q2',
-  level: 'Advanced',
+  id: 'ai-q1',
+  level: 'AI Generated • Difficulty 8/10',
   question:
     'Explain the role of a cross-encoder re-ranker before feeding retrieved vectors to an LLM context window.',
-  idealKeywords: ['cross-encoder', 're-ranking'],
+  expected_keywords: ['cross-encoder', 're-ranking'],
+  content_origin: 'AI_GENERATED',
   difficulty: 8
-};
-
-const RAG_BANK = {
-  'RAG Pipelines': [RAG_CURRENT, RAG_ALTERNATIVE]
 };
 
 test('loads a genuinely new question in a single request', async () => {
@@ -42,16 +38,16 @@ test('loads a genuinely new question in a single request', async () => {
     fetchQuestion: async () => {
       calls += 1;
       return RAG_ALTERNATIVE;
-    },
-    bank: RAG_BANK
+    }
   });
 
   assert.equal(calls, 1);
   assert.equal(result.sameQuestion, false);
   assert.equal(result.usedFallback, false);
   assert.equal(result.question.question, RAG_ALTERNATIVE.question);
-  assert.equal(result.question.level, 'Advanced');
+  assert.equal(result.question.level, 'AI Generated • Difficulty 8/10');
   assert.deepEqual(result.question.keywords, ['cross-encoder', 're-ranking']);
+  assert.equal(result.question.content_origin, 'AI_GENERATED');
 });
 
 test('question counter advances only after a question is ready', () => {
@@ -93,7 +89,7 @@ test('starting the next question clears previous feedback and evaluation errors'
   assert.equal(started.questionError, null);
 });
 
-test('a repeated backend question is retried once, then replaced from the local bank', async () => {
+test('a repeated AI question is retried once, then returned with a repeat notice', async () => {
   let calls = 0;
   const result = await loadNextAdaptiveQuestion({
     skill: 'RAG Pipelines',
@@ -103,17 +99,16 @@ test('a repeated backend question is retried once, then replaced from the local 
       calls += 1;
       return { ...RAG_CURRENT };
     },
-    bank: RAG_BANK,
     maxRetries: 1
   });
 
   assert.equal(calls, 2, 'the request is bounded to one retry');
-  assert.equal(result.sameQuestion, false);
-  assert.equal(result.usedFallback, true);
-  assert.equal(result.question.question, RAG_ALTERNATIVE.question);
+  assert.equal(result.sameQuestion, true);
+  assert.equal(result.usedFallback, false);
+  assert.equal(result.question.question, RAG_CURRENT.question);
 });
 
-test('a repeated question without alternatives does not loop forever', async () => {
+test('a repeated question without a new AI response does not loop forever', async () => {
   let calls = 0;
   const onlyQuestion = { question: 'Only Docker question available.', difficulty: 5 };
   const result = await loadNextAdaptiveQuestion({
@@ -124,7 +119,6 @@ test('a repeated question without alternatives does not loop forever', async () 
       calls += 1;
       return { ...onlyQuestion };
     },
-    bank: { Docker: [{ ...onlyQuestion }] },
     maxRetries: 1
   });
 
@@ -147,7 +141,6 @@ test('failed question loading rejects without retrying the endpoint', async () =
           calls += 1;
           throw new Error('network down');
         },
-        bank: {},
         maxRetries: 1
       }),
     /network down/
@@ -164,23 +157,22 @@ test('failed loading keeps the counter and exposes a retryable error', () => {
   assert.equal(failed.questionError, 'network down');
 });
 
-test('failed loading can use a local alternative instead of showing an error', async () => {
-  const result = await loadNextAdaptiveQuestion({
-    skill: 'RAG Pipelines',
-    difficulty: 7,
-    currentQuestion: RAG_CURRENT,
-    fetchQuestion: async () => {
-      throw new Error('network down');
-    },
-    bank: RAG_BANK
-  });
-
-  assert.equal(result.usedFallback, true);
-  assert.equal(result.sameQuestion, false);
-  assert.equal(result.question.question, RAG_ALTERNATIVE.question);
+test('failed loading rejects instead of using seeded fallback content', async () => {
+  await assert.rejects(
+    () =>
+      loadNextAdaptiveQuestion({
+        skill: 'RAG Pipelines',
+        difficulty: 7,
+        currentQuestion: RAG_CURRENT,
+        fetchQuestion: async () => {
+          throw new Error('AI interview question generation is unavailable right now. Please retry.');
+        }
+      }),
+    /unavailable right now/
+  );
 });
 
-test('missing question payloads produce a clear fallback error', async () => {
+test('missing question payloads produce a clear unavailable error', async () => {
   await assert.rejects(
     () =>
       loadNextAdaptiveQuestion({
@@ -188,7 +180,6 @@ test('missing question payloads produce a clear fallback error', async () => {
         difficulty: 6,
         currentQuestion: RAG_CURRENT,
         fetchQuestion: async () => null,
-        bank: {},
         maxRetries: 0
       }),
     new RegExp(QUESTION_LOAD_ERROR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -209,11 +200,10 @@ test('question comparison normalizes whitespace and casing', () => {
   );
 });
 
-test('alternative selection prefers the closest difficulty and skips the current question', () => {
-  const alternative = findAlternativeQuestion(RAG_BANK, 'RAG Pipelines', 7, RAG_CURRENT);
-  assert.equal(alternative.question, RAG_ALTERNATIVE.question);
-
+test('AI questions normalize expected_keywords and preserve their origin', () => {
   const normalized = normalizeQuestion(RAG_ALTERNATIVE);
-  assert.equal(normalized.level, 'Advanced');
+  assert.equal(normalized.level, 'AI Generated • Difficulty 8/10');
   assert.deepEqual(normalized.keywords, ['cross-encoder', 're-ranking']);
+  assert.deepEqual(normalized.expected_keywords, ['cross-encoder', 're-ranking']);
+  assert.equal(normalized.content_origin, 'AI_GENERATED');
 });

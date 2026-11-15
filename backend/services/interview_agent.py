@@ -1,13 +1,20 @@
 """
 CareerSync Interview Agent
-Unified service for adaptive question retrieval, response validation,
-and deterministic rubric evaluation.
+Runtime AI question generation plus deterministic rubric evaluation.
+No seeded question bank is used as question content or fallback.
 """
 
 import re
+import uuid
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
-from data_seeds import INTERVIEW_QUESTION_BANK
+
+from services.ai_engine import CareerSyncAIEngine, AIProviderUnavailableError
+
+
+class InterviewQuestionUnavailableError(Exception):
+    """Raised when a runtime AI question cannot be generated or validated."""
+    pass
 
 
 class InterviewEvaluationSchema(BaseModel):
@@ -22,27 +29,84 @@ class InterviewEvaluationSchema(BaseModel):
 
 class InterviewAgentService:
     @classmethod
-    def get_question(cls, skill: str, difficulty: int = 6) -> Dict[str, Any]:
+    def get_question(
+        cls,
+        skill: str,
+        difficulty: int = 6,
+        target_role: str = "",
+        previous_question_text: str = ""
+    ) -> Dict[str, Any]:
         """
-        Retrieves the question closest to the requested difficulty level.
-        Falls back to a foundational question if the skill is unknown.
+        Generates one interview question with AI. There is no seeded fallback:
+        provider or validation failures raise InterviewQuestionUnavailableError
+        so the API can return an explicit unavailable state.
         """
         clamped_diff = max(1, min(10, difficulty))
-        questions = INTERVIEW_QUESTION_BANK.get(skill)
+        try:
+            generated = CareerSyncAIEngine.generate_interview_question_with_ai(
+                skill=skill,
+                difficulty=clamped_diff,
+                target_role=target_role,
+                previous_question_text=previous_question_text
+            )
+        except AIProviderUnavailableError as exc:
+            raise InterviewQuestionUnavailableError(
+                "AI interview question generation is unavailable right now. Please retry."
+            ) from exc
+        except Exception as exc:
+            raise InterviewQuestionUnavailableError(
+                "AI interview question generation is unavailable right now. Please retry."
+            ) from exc
 
-        if not questions:
-            # Fallback for unrecognized skills
-            return {
-                "id": "gen-q1",
-                "level": "General Technical",
-                "question": f"Explain the core engineering concepts, architecture trade-offs, and best practices associated with {skill}.",
-                "keywords": ["scalability", "trade-offs", "performance", "architecture", "testing"],
-                "difficulty": clamped_diff
-            }
+        return {
+            "id": f"ai-q-{uuid.uuid4().hex[:12]}",
+            "level": f"AI Generated • Difficulty {generated['difficulty']}/10",
+            "question": generated["question"],
+            "skill": generated["skill"],
+            "keywords": generated["expected_keywords"],
+            "expected_keywords": generated["expected_keywords"],
+            "difficulty": generated["difficulty"],
+            "content_origin": "AI_GENERATED",
+            "data_mode": "AI_GENERATED"
+        }
 
-        # Select question minimizing distance to target difficulty
-        closest = min(questions, key=lambda q: abs(q.get("difficulty", 6) - clamped_diff))
-        return closest
+    @classmethod
+    def build_evaluation_question(
+        cls,
+        question_text: str = "",
+        expected_keywords: List[str] = None,
+        skill: str = "",
+        difficulty: int = 6
+    ) -> Dict[str, Any]:
+        """
+        Builds the evaluation context from the question the candidate actually
+        answered. This deliberately does not look up or generate a question.
+        """
+        keywords = []
+        seen = set()
+        for item in expected_keywords or []:
+            if not isinstance(item, str):
+                continue
+            keyword = item.strip()
+            if not keyword:
+                continue
+            key = keyword.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            keywords.append(keyword)
+
+        try:
+            clamped_diff = int(difficulty)
+        except (TypeError, ValueError):
+            clamped_diff = 6
+
+        return {
+            "question": str(question_text or "").strip(),
+            "keywords": keywords[:20],
+            "skill": str(skill or "").strip(),
+            "difficulty": max(1, min(10, clamped_diff))
+        }
 
     @classmethod
     def evaluate_locally(cls, question: Dict[str, Any], answer_text: str, current_diff: int) -> Dict[str, Any]:

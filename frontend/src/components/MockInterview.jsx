@@ -17,6 +17,10 @@ import {
   hasRealInterviewQuestion,
   saveInterviewSession
 } from '../utils/interviewSession';
+import {
+  INTERVIEW_ANSWER_MAX_LENGTH,
+  getInterviewAnswerValidation
+} from '../utils/interviewAnswer';
 import { isResponseForStudent } from '../utils/profileState';
 
 export default function MockInterview({
@@ -55,6 +59,10 @@ export default function MockInterview({
   const updateSession = (patch) => {
     setSession(prev => ({ ...prev, ...patch }));
   };
+
+  // Validation mirrors the backend contract, but the answer itself is never
+  // truncated so the student can keep editing it down to the limit.
+  const answerValidation = getInterviewAnswerValidation(answer);
 
   useLayoutEffect(() => {
     const previousStudentId = activeStudentIdRef.current;
@@ -120,7 +128,11 @@ export default function MockInterview({
 
     try {
       const question = normalizeQuestion(
-        await apiClient.getInterviewQuestion(skill, requestedDifficulty)
+        await apiClient.getInterviewQuestion(
+          skill,
+          requestedDifficulty,
+          targetRoleTitle
+        )
       );
       if (!isCurrentRequest()) return;
       if (question) updateSession({ currentQuestion: question });
@@ -224,13 +236,16 @@ export default function MockInterview({
   };
 
   const handleSubmit = async () => {
-    if (!answer.trim() || isEvaluating) return;
+    if (!answerValidation.canSubmit || isEvaluating) return;
 
     const requestStudentId = studentId;
     const requestId = ++evaluationRequestIdRef.current;
     const submittedSkill = currentSkill;
     const submittedDifficulty = difficulty;
     const submittedQuestion = currentQuestion.question;
+    const submittedKeywords = Array.isArray(currentQuestion.expected_keywords)
+      ? currentQuestion.expected_keywords
+      : (Array.isArray(currentQuestion.keywords) ? currentQuestion.keywords : []);
     const submittedAnswer = answer;
 
     updateSession({ isEvaluating: true, evaluationError: null });
@@ -245,7 +260,8 @@ export default function MockInterview({
         submittedSkill,
         submittedAnswer,
         submittedDifficulty,
-        submittedQuestion
+        submittedQuestion,
+        submittedKeywords
       );
 
       if (!isCurrentRequest()) return;
@@ -298,7 +314,12 @@ export default function MockInterview({
         difficulty: nextDifficulty,
         currentQuestion: nextQuestion,
         fetchQuestion: (skill, requestedDifficulty) =>
-          apiClient.getInterviewQuestion(skill, requestedDifficulty)
+          apiClient.getInterviewQuestion(
+            skill,
+            requestedDifficulty,
+            targetRoleTitle,
+            nextQuestion?.question || ""
+          )
       });
 
       if (!isCurrentRequest()) return;
@@ -307,7 +328,7 @@ export default function MockInterview({
       updateSession({
         ...finished,
         questionNotice: result.sameQuestion
-          ? "No alternative question is available for this topic yet, so the same prompt was kept."
+          ? "The AI returned the same prompt again. Retry to generate a different question."
           : null
       });
     } catch (err) {
@@ -370,9 +391,16 @@ export default function MockInterview({
       {(hasRealQuestion || isLoadingQuestion) && (
         <div className="bg-canvas p-5 rounded-2.5xl border border-[#E2E2DE] space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-terracotta-600 bg-terracotta-50 px-2.5 py-0.5 rounded-full border border-terracotta-100">
-              Question #{questionCount} • {currentQuestion.level || "Adaptive"}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-terracotta-600 bg-terracotta-50 px-2.5 py-0.5 rounded-full border border-terracotta-100">
+                Question #{questionCount} • {currentQuestion.level || "Adaptive"}
+              </span>
+              {currentQuestion.content_origin === "AI_GENERATED" && (
+                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  AI-generated question
+                </span>
+              )}
+            </div>
             <button
               onClick={handleSpeakQuestion}
               disabled={isLoadingQuestion}
@@ -409,7 +437,7 @@ export default function MockInterview({
 
       {questionError && (
         <RetryableErrorCard
-          title="Could Not Load Adaptive Question"
+          title="AI Interview Question Unavailable"
           message={questionError}
           onRetry={questionErrorSource === 'next' ? handleNext : loadQuestion}
           isRetrying={isLoadingQuestion}
@@ -447,8 +475,37 @@ export default function MockInterview({
           value={answer}
           onChange={(e) => updateSession({ answer: e.target.value })}
           placeholder="Explain your technical design, architectural components, and performance trade-offs..."
-          className="w-full text-xs p-4 rounded-2xl bg-canvas border border-[#E0E0DC] text-obsidian placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-obsidian resize-none"
+          aria-invalid={answerValidation.isTooLong || undefined}
+          aria-describedby="answer-length-feedback"
+          className={`w-full text-xs p-4 rounded-2xl bg-canvas border text-obsidian placeholder-zinc-400 focus:outline-none focus:ring-1 resize-none ${
+            answerValidation.isTooLong
+              ? 'border-rose-400 focus:ring-rose-500'
+              : 'border-[#E0E0DC] focus:ring-obsidian'
+          }`}
         />
+
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div id="answer-length-feedback" className="min-h-[1rem]">
+            {answerValidation.message && (
+              <p
+                role={answerValidation.isTooLong ? 'alert' : undefined}
+                className={`flex items-center space-x-1.5 text-[11px] font-semibold ${
+                  answerValidation.isTooLong ? 'text-rose-600' : 'text-subtle'
+                }`}
+              >
+                {answerValidation.isTooLong && <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+                <span>{answerValidation.message}</span>
+              </p>
+            )}
+          </div>
+          <span
+            className={`text-[11px] font-mono font-bold shrink-0 ml-auto ${
+              answerValidation.isTooLong ? 'text-rose-600' : 'text-subtle'
+            }`}
+          >
+            {answerValidation.length} / {INTERVIEW_ANSWER_MAX_LENGTH} characters
+          </span>
+        </div>
 
         <div className="flex items-center justify-between">
           <button
@@ -467,7 +524,7 @@ export default function MockInterview({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={!answer.trim() || isEvaluating}
+            disabled={!hasRealQuestion || !answerValidation.canSubmit || isEvaluating}
             className="px-6 py-2.5 rounded-full text-xs font-extrabold bg-obsidian text-white flex items-center space-x-2 hover:bg-zinc-800 disabled:opacity-50 transition-all shadow-xs"
           >
             {isEvaluating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

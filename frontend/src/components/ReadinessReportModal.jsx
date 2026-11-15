@@ -51,7 +51,9 @@ export default function ReadinessReportModal({ student, targetJob, readiness, on
               <span className="text-[10px] uppercase font-bold text-zinc-500 block">Target Placement Role:</span>
               <span className="text-sm font-bold text-zinc-900 block">{targetJob?.title || "No active technical role"}</span>
               <span className="text-xs text-zinc-600">
-                {targetJob ? `${targetJob.company} (${targetJob.tier})` : "Choose a technical role to see role-specific readiness"}
+                {targetJob
+                  ? `${targetJob.company} • ${targetJob.location || "Location not provided"} • ${targetJob.source_name || "Live listing"}`
+                  : "Choose a live technical role to see role-specific readiness"}
               </span>
             </div>
           </div>

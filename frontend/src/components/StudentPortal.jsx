@@ -3,9 +3,9 @@ import {
   Upload, FileText, CheckCircle2, AlertTriangle,
   ExternalLink, TrendingUp, Eye, Send, Check, User,
   Bookmark, BookmarkCheck, EyeOff, Sliders, Sparkles, Clock, BookOpen,
-  Compass, Award, RefreshCw
+  Compass, Award, RefreshCw, Search
 } from 'lucide-react';
-import { TARGET_JOBS, DEMO_PROFILES } from '../data/seedData';
+import { DEMO_PROFILES } from '../data/seedData';
 import { assessLayoffRisk, MARKET_SKILL_RADAR } from '../data/marketTaxonomy';
 import { evaluateJobMatch } from '../utils/semanticMatcher';
 import { buildProfileReadiness } from '../utils/readiness';
@@ -14,6 +14,17 @@ import {
   applyMilestoneToggleResult,
   normalizeCompletedMilestones
 } from '../utils/milestones';
+import {
+  hasAiProvenance,
+  normalizeAiRoadmap,
+  resolveMaterialLink
+} from '../utils/learningPlan';
+import {
+  LIVE_JOBS_LOAD_ERROR,
+  getLiveJobSourceName,
+  isSafeLiveJobUrl,
+  normalizeLiveJobs
+} from '../utils/liveJobs';
 import { resolveRoadmapRecommendation } from '../utils/roadmapRecommendation';
 import { filterTechnicalJobs, resolveSelectedJobId } from '../utils/jobRelevance';
 import {
@@ -66,30 +77,28 @@ import {
 } from '../utils/feedback';
 import { apiClient } from '../api/client';
 
-const buildInitialProfileUi = () => {
-  const jobs = filterTechnicalJobs(TARGET_JOBS);
-  return {
-    jobsList: jobs,
-    selectedJobId: resolveSelectedJobId(jobs, TARGET_JOBS[0]?.id),
-    completedMilestones: [],
-    interviewScore: 70,
-    serverProgress: null,
-    preferences: null,
-    feedbackRecords: [],
-    roadmap: [],
-    isLoadingRoadmap: true,
-    roadmapError: null,
-    jobsError: null,
-    preferencesError: null,
-    feedbackError: null,
-    applicationFeedback: null,
-    milestoneFeedback: null,
-    jobFeedback: null,
-    preferencesFeedback: null,
-    resumeFeedback: null,
-    isUploading: false
-  };
-};
+const buildInitialProfileUi = () => ({
+  jobsList: [],
+  selectedJobId: null,
+  completedMilestones: [],
+  interviewScore: 70,
+  serverProgress: null,
+  preferences: null,
+  feedbackRecords: [],
+  roadmap: [],
+  isLoadingRoadmap: true,
+  roadmapError: null,
+  isLoadingJobs: true,
+  jobsError: null,
+  preferencesError: null,
+  feedbackError: null,
+  applicationFeedback: null,
+  milestoneFeedback: null,
+  jobFeedback: null,
+  preferencesFeedback: null,
+  resumeFeedback: null,
+  isUploading: false
+});
 
 const createInitialProfileState = () =>
   DEMO_PROFILES.reduce((acc, profile) => {
@@ -141,6 +150,7 @@ export default function StudentPortal() {
     roadmap: dynamicRoadmap,
     isLoadingRoadmap,
     roadmapError,
+    isLoadingJobs,
     jobsError,
     preferencesError,
     feedbackError,
@@ -314,33 +324,36 @@ export default function StudentPortal() {
   const fetchRankedJobs = (studentId = currentStudent.id) => {
     const requestKey = `jobs:${studentId}`;
     const requestId = beginRequest(requestIdsRef.current, requestKey);
-    updateProfileUiFor(studentId, { jobsError: null });
+    updateProfileUiFor(studentId, { isLoadingJobs: true, jobsError: null });
 
     apiClient.getRankedJobs(studentId)
       .then(res => {
         if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
-        const rankedJobs = Array.isArray(res?.ranked_jobs) ? res.ranked_jobs : [];
-        const technicalJobs = filterTechnicalJobs(rankedJobs);
+        // Only backend-validated LIVE_DATA listings with a real source URL are
+        // accepted. A seeded or AI-generated job normalizes to nothing, so the
+        // portal shows the explicit empty state instead of local content.
+        const liveJobs = normalizeLiveJobs(res?.ranked_jobs);
+        const technicalJobs = filterTechnicalJobs(liveJobs);
         updateProfileUiFor(studentId, current => ({
           jobsList: technicalJobs,
           selectedJobId: resolveVisibleJobState({
             jobs: technicalJobs,
             selectedJobId: current.selectedJobId,
             feedbackRecords: current.feedbackRecords
-          }).selectedJobId
+          }).selectedJobId,
+          isLoadingJobs: false
         }));
       })
       .catch((err) => {
         if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
-        const fallbackJobs = filterTechnicalJobs(TARGET_JOBS);
+        // No local fallback: provider failure is an explicit retryable state.
         updateProfileUiFor(studentId, current => ({
-          jobsError: err?.message || "Failed to load personalized job ranking.",
-          jobsList: fallbackJobs,
-          selectedJobId: resolveVisibleJobState({
-            jobs: fallbackJobs,
-            selectedJobId: current.selectedJobId,
-            feedbackRecords: current.feedbackRecords
-          }).selectedJobId
+          jobsError: err?.message || LIVE_JOBS_LOAD_ERROR,
+          jobsList: [],
+          selectedJobId: null,
+          roadmap: [],
+          isLoadingJobs: false,
+          isLoadingRoadmap: false
         }));
       });
   };
@@ -423,7 +436,10 @@ export default function StudentPortal() {
       .then(res => {
         if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
         updateProfileUiFor(studentId, current => {
-          const roadmap = Array.isArray(res?.roadmap) ? res.roadmap : [];
+          // Only runtime AI-generated weeks are rendered. A legacy seeded
+          // payload normalizes to an empty plan and shows the explicit empty
+          // state instead of falling back to catalog content.
+          const roadmap = normalizeAiRoadmap(res?.roadmap);
 
           // Once the saved progress snapshot has loaded, its milestone list is
           // authoritative. This prevents a slower, pre-toggle roadmap response
@@ -438,7 +454,7 @@ export default function StudentPortal() {
       .catch((err) => {
         if (!isLatestRequest(requestIdsRef.current, requestKey, requestId)) return;
         updateProfileUiFor(studentId, {
-          roadmapError: err?.message || "Unable to generate personalized roadmap.",
+          roadmapError: err?.message || "AI learning roadmap generation is unavailable right now. Please retry.",
           roadmap: []
         });
       })
@@ -507,7 +523,7 @@ export default function StudentPortal() {
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("target_job_id", selectedJobId || TARGET_JOBS[0].id);
+    if (selectedJobId) formData.append("target_job_id", selectedJobId);
 
     try {
       const response = await fetch("/api/v1/students/resume/upload-pdf", {
@@ -528,7 +544,7 @@ export default function StudentPortal() {
         activeAppsCount: 0,
         slaHoursPending: 1,
         adminStatus: "Pending",
-        targetRole: selectedJobId || TARGET_JOBS[0].id,
+        targetRole: selectedJobId || "",
         skills: data.extracted_skills || [],
         rawResume: data.clean_resume || "",
         qualityScore: data.quality_audit?.quality_score || 80,
@@ -708,7 +724,7 @@ export default function StudentPortal() {
     const jobId = selectedJob.id;
     const jobTitle = selectedJob.title;
     const company = selectedJob.company;
-    const tier = selectedJob.tier;
+    const tier = selectedJob.tier || null;
 
     submittingStudentsRef.current.add(studentId);
     setSubmittingApplicationStudents(prev =>
@@ -881,7 +897,9 @@ export default function StudentPortal() {
   };
 
   const hasApplied = selectedJob ? appliedJobs.includes(selectedJob.id) : false;
-  const isCgpaBlocked = selectedJob?.tier === "Tier-1" && currentStudent.cgpa < 6.0;
+  // Live listings carry no university-assigned tier, so the portal does not
+  // invent one for a CGPA block. The application cap still applies.
+  const isCgpaBlocked = false;
   const isCapBlocked = currentStudent.activeAppsCount >= 3;
   const isSubmittingForCurrentStudent = submittingApplicationStudents.includes(currentStudent.id);
   const applicationAction = resolveApplicationActionState({
@@ -973,7 +991,7 @@ export default function StudentPortal() {
         <RetryableErrorCard
           title="Could Not Load Next Best Step"
           message={recommendationView.message}
-          onRetry={fetchRoadmap}
+          onRetry={() => fetchRoadmap()}
           isRetrying={isLoadingRoadmap}
         />
       ) : (
@@ -1195,10 +1213,19 @@ export default function StudentPortal() {
             )}
             {jobsError ? (
               <RetryableErrorCard
-                title="Could Not Load Opportunities"
+                title="Could Not Load Live Listings"
                 message={jobsError}
-                onRetry={fetchRankedJobs}
+                onRetry={() => fetchRankedJobs()}
+                isRetrying={isLoadingJobs}
               />
+            ) : isLoadingJobs ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="p-8 rounded-2.5xl bg-canvas border border-[#E2E2DE] text-center text-xs text-subtle"
+              >
+                Fetching live job listings...
+              </div>
             ) : visibleJobs.length === 0 ? (
               <div
                 role="status"
@@ -1210,12 +1237,12 @@ export default function StudentPortal() {
                 </div>
                 <div>
                   <h3 className="font-bold text-obsidian text-sm">
-                    {jobsList.length > 0 ? "All technical roles are hidden" : "No technical roles available"}
+                    {jobsList.length > 0 ? "All live roles are hidden" : "No Live Listings Available"}
                   </h3>
                   <p className="text-xs text-subtle mt-1 leading-relaxed max-w-md mx-auto">
                     {jobsList.length > 0
-                      ? "You have hidden every technical role in the current feed. Hidden roles stay saved to your profile and remain out of your recommendations."
-                      : "We filtered out non-technical listings from the current opportunity feed. Refresh to check again for software, data, cloud, security, and platform roles."}
+                      ? "You have hidden every live technical role in the current feed. Hidden roles stay saved to your profile and remain out of your recommendations."
+                      : LIVE_JOBS_EMPTY_MESSAGE}
                   </p>
                 </div>
                 <button
@@ -1223,7 +1250,7 @@ export default function StudentPortal() {
                   onClick={fetchRankedJobs}
                   className="px-4 py-2 rounded-full bg-obsidian text-white text-xs font-bold hover:bg-zinc-800 transition-all shadow-xs"
                 >
-                  Refresh Opportunities
+                  Refresh Live Listings
                 </button>
               </div>
             ) : (
@@ -1232,15 +1259,8 @@ export default function StudentPortal() {
                   <div className="min-w-0 w-full sm:w-auto">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="text-xs text-subtle font-semibold">Active Placement Target:</span>
-                      {/* Sprint 3: Provenance Badge */}
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                        selectedJob.data_mode === "LIVE_DATA"
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-zinc-100 text-zinc-600 border-zinc-200'
-                      }`}>
-                        {selectedJob.data_mode === "LIVE_DATA"
-                          ? `🟢 Live Public Opportunity (${selectedJob.source_label || "Arbeitnow"})`
-                          : `📋 Curated Institutional Sample`}
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
+                        🟢 Live listing • {getLiveJobSourceName(selectedJob)}
                       </span>
                     </div>
                     <div className="flex items-center space-x-2 mt-1.5 min-w-0">
@@ -1251,7 +1271,7 @@ export default function StudentPortal() {
                       >
                         {visibleJobs.map((job, idx) => (
                           <option key={`${job.id}-${idx}`} value={job.id}>
-                            {job.title} — {job.company} ({job.composite_score ? `${job.composite_score}% Match` : job.tier})
+                            {job.title} — {job.company} ({job.composite_score ? `${job.composite_score}% Match` : job.location})
                           </option>
                         ))}
                       </select>
@@ -1309,6 +1329,31 @@ export default function StudentPortal() {
                     ))}
                   </div>
                 )}
+
+                <div className="p-4 rounded-2.5xl bg-canvas border border-[#E2E2DE] space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                      Live listing
+                    </span>
+                    <span className="text-[10px] text-subtle font-mono">
+                      {selectedJob.location}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-700 leading-relaxed line-clamp-4">
+                    {selectedJob.description}
+                  </p>
+                  {isSafeLiveJobUrl(selectedJob.source_url) && (
+                    <a
+                      href={selectedJob.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center space-x-1 text-[11px] font-bold text-obsidian hover:text-terracotta-500"
+                    >
+                      <span>View original listing on {getLiveJobSourceName(selectedJob)}</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
 
                 <div className="p-4 rounded-2.5xl bg-canvas border border-[#E2E2DE] space-y-2.5">
                   <div className="flex items-center space-x-1.5 text-xs font-bold text-obsidian">
@@ -1410,13 +1455,19 @@ export default function StudentPortal() {
                 targetRole={selectedJob.title}
               />
 
-              {/* Dynamic 4-Week Roadmap with Retryable Error Card */}
+              {/* Runtime AI learning plan with retryable unavailable/empty states */}
               <div className="bg-surface rounded-3xl p-6 border border-[#E6E6E3] shadow-xs space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <BookOpen className="w-4 h-4 text-terracotta-500" />
-                      <h3 className="font-bold text-obsidian text-base">4-Week Career Preparation Plan</h3>
+                      <h3 className="font-bold text-obsidian text-base">4-Week AI Learning Plan</h3>
+                      {hasAiProvenance(dynamicRoadmap) && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                          <Sparkles className="w-3 h-3" />
+                          AI-generated plan
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-subtle">
                       Adapted for <strong className="text-obsidian">{selectedJob.title}</strong> • Style: <strong className="text-obsidian">{preferences?.learning_style?.replace('_', ' ') || 'PROJECT BASED'}</strong>
@@ -1438,59 +1489,101 @@ export default function StudentPortal() {
 
                 {roadmapError ? (
                   <RetryableErrorCard
-                    title="Could Not Generate Roadmap"
+                    title="AI Learning Plan Unavailable"
                     message={roadmapError}
-                    onRetry={fetchRoadmap}
+                    onRetry={() => fetchRoadmap()}
                     isRetrying={isLoadingRoadmap}
                   />
                 ) : isLoadingRoadmap ? (
-                  <div className="p-8 text-center text-xs text-subtle">Personalizing roadmap modules...</div>
+                  <div className="p-8 text-center text-xs text-subtle" aria-live="polite">
+                    Generating your AI learning plan...
+                  </div>
+                ) : dynamicRoadmap.length === 0 ? (
+                  <RetryableErrorCard
+                    title="No AI Learning Plan Returned"
+                    message="The AI did not return any learning weeks for this role. Retry to generate a fresh plan."
+                    onRetry={() => fetchRoadmap()}
+                    isRetrying={isLoadingRoadmap}
+                  />
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {dynamicRoadmap.map((item, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => toggleMilestone(item.week)}
-                        className={`p-4 rounded-2.5xl border transition-all cursor-pointer select-none flex flex-col justify-between space-y-3 ${
-                          item.is_completed || completedMilestones.includes(item.week)
-                            ? 'bg-emerald-50/50 border-emerald-300'
-                            : 'bg-canvas border-[#E2E2DE] hover:border-terracotta-300'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-bold text-terracotta-600 uppercase tracking-wider">
-                              Week {item.week} • {item.skill}
-                            </span>
-                            <CheckCircle2 className={`w-4 h-4 ${item.is_completed || completedMilestones.includes(item.week) ? 'text-emerald-600' : 'text-zinc-300'}`} />
-                          </div>
-                          <h4 className="font-bold text-obsidian text-xs mt-1 leading-snug">{item.title}</h4>
-                          <p className="text-[11px] text-subtle mt-0.5">{item.provider}</p>
-                        </div>
+                    {dynamicRoadmap.map((item) => {
+                      const material = resolveMaterialLink(item);
+                      const hours = item.estimated_hours ?? item.allocated_hours;
+                      const isDone =
+                        item.is_completed || completedMilestones.includes(item.week);
 
-                        <div className="space-y-2 pt-1 border-t border-[#E8E8E4]">
-                          <div className="flex items-center justify-between text-[10px] text-zinc-600">
-                            <span className="bg-surface px-2 py-0.5 rounded-full border border-[#E0E0DC] font-medium">
-                              {item.format_badge}
-                            </span>
-                            <span className="flex items-center space-x-1 font-mono text-terracotta-700">
-                              <Clock className="w-3 h-3" />
-                              <span>{item.allocated_hours}h / {item.weekly_budget}h budget</span>
-                            </span>
+                      return (
+                        <div
+                          key={item.week}
+                          onClick={() => toggleMilestone(item.week)}
+                          className={`p-4 rounded-2.5xl border transition-all cursor-pointer select-none flex flex-col justify-between space-y-3 ${
+                            isDone
+                              ? 'bg-emerald-50/50 border-emerald-300'
+                              : 'bg-canvas border-[#E2E2DE] hover:border-terracotta-300'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-terracotta-600 uppercase tracking-wider">
+                                Week {item.week} • {item.skill}
+                              </span>
+                              <CheckCircle2 className={`w-4 h-4 ${isDone ? 'text-emerald-600' : 'text-zinc-300'}`} />
+                            </div>
+                            <h4 className="font-bold text-obsidian text-xs leading-snug">{item.title}</h4>
+                            {item.learning_objective && (
+                              <p className="text-[11px] text-zinc-600 leading-relaxed">
+                                {item.learning_objective}
+                              </p>
+                            )}
                           </div>
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center space-x-1 text-xs font-bold text-obsidian hover:text-terracotta-500"
-                          >
-                            <span>Access Material</span>
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
+
+                          <div className="space-y-2 pt-1 border-t border-[#E8E8E4]">
+                            <div className="flex items-center justify-between text-[10px] text-zinc-600">
+                              <span className="bg-surface px-2 py-0.5 rounded-full border border-[#E0E0DC] font-medium">
+                                {item.activity_label}
+                              </span>
+                              {hours ? (
+                                <span className="flex items-center space-x-1 font-mono text-terracotta-700">
+                                  <Clock className="w-3 h-3" />
+                                  <span>
+                                    {hours}h{item.weekly_budget ? ` / ${item.weekly_budget}h budget` : ''}
+                                  </span>
+                                </span>
+                              ) : null}
+                            </div>
+                            {item.study_note && (
+                              <p className="text-[10px] text-zinc-500 leading-relaxed">
+                                {item.study_note}
+                              </p>
+                            )}
+                            {material && (
+                              <>
+                                {material.kind === 'search' && item.search_query && (
+                                  <p className="text-[10px] font-mono text-zinc-500 break-words">
+                                    Query: {item.search_query}
+                                  </p>
+                                )}
+                                <a
+                                  href={material.href}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center space-x-1 text-xs font-bold text-obsidian hover:text-terracotta-500"
+                                >
+                                  {material.kind === 'search' ? (
+                                    <Search className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>{material.label}</span>
+                                </a>
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1498,7 +1591,11 @@ export default function StudentPortal() {
               <MockInterview
                 studentId={currentStudent.id}
                 targetRoleTitle={selectedJob.title}
-                missingSkills={matchResult.missingSkills.length > 0 ? matchResult.missingSkills : (selectedJob.requiredSkills || ["System Design", "Docker"])}
+                missingSkills={
+                  matchResult.missingSkills.length > 0
+                    ? matchResult.missingSkills
+                    : (selectedJob.required_skills || selectedJob.requiredSkills || [])
+                }
                 onScoreUpdate={(score) => updateProfileUiFor(currentStudent.id, { interviewScore: score })}
               />
             </>

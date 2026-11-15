@@ -6,7 +6,7 @@ import {
   isLatestRequest,
   isResponseForStudent,
   updateProfileState
-} from './profileState.js';
+} from '../../src/utils/profileState.js';
 
 test('profile state is isolated per student', () => {
   const store = {};

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {
   findNextRoadmapItem,
   resolveRoadmapRecommendation
-} from './roadmapRecommendation.js';
-import { buildProfileReadiness } from './readiness.js';
+} from '../../src/utils/roadmapRecommendation.js';
+import { buildProfileReadiness } from '../../src/utils/readiness.js';
 
 const ROADMAP = [
   { week: 1, skill: 'System Design', is_completed: false },

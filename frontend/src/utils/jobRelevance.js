@@ -308,7 +308,15 @@ export function filterTechnicalJobs(jobs) {
   return jobs
     .filter(isTechnicalJob)
     .map(job => {
-      const requiredSkills = normalizeJobSkills(job);
+      // Preserve the provider-derived skills returned by the backend. Only
+      // fall back to local normalization when the listing has no skill list.
+      const providerSkills = Array.isArray(job.required_skills)
+        ? job.required_skills.filter(skill => typeof skill === 'string' && skill.trim())
+        : [];
+      const requiredSkills = providerSkills.length > 0
+        ? providerSkills
+        : normalizeJobSkills(job);
+
       return {
         ...job,
         requiredSkills,

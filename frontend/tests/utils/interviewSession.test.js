@@ -4,7 +4,7 @@ import {
   createInterviewSession,
   getInterviewSession,
   saveInterviewSession
-} from './interviewSession.js';
+} from '../../src/utils/interviewSession.js';
 
 test('each student receives a fresh default interview session', () => {
   const priya = getInterviewSession({}, 'stud-01', 'RAG Pipelines');

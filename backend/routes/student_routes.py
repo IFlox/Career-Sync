@@ -20,7 +20,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.exc import IntegrityError
 
 from database import StudentRepository, PreferenceRepository
-from services.live_jobs import LiveJobProvider
+from services.live_jobs import LiveJobProvider, LiveJobsUnavailableError
 from services.policy_engine import UniversityPolicyEngine
 from services.pdf_parser import PDFResumeParser
 from services.pii_scrubber import PIIScrubberService
@@ -28,24 +28,62 @@ from services.ai_engine import CareerSyncAIEngine, AIProviderUnavailableError
 from services.resume_auditor import ResumeAuditorService
 from services.matching_engine import SemanticMatchingEngine
 from services.market_radar import MarketRadarService
-from services.interview_agent import InterviewAgentService
+from services.interview_agent import InterviewAgentService, InterviewQuestionUnavailableError
 from services.progress_tracker import ProgressTrackerService
-from services.upskilling_planner import UpskillingPlannerService
+from services.upskilling_planner import UpskillingPlannerService, RoadmapUnavailableError
 from services.admin_auth import verify_tpo_token
-from data_seeds import VERIFIED_LEARNING_CATALOG, HACKATHON_SEEDS
 
 router = APIRouter(prefix="/students", tags=["Student Portal"])
 
 MAX_PDF_SIZE_BYTES = 5 * 1024 * 1024
 
+LIVE_JOBS_UNAVAILABLE_DETAIL = (
+    "Live job listings are unavailable right now. Please retry."
+)
+NO_LIVE_JOBS_DETAIL = (
+    "No live technical job listings are available right now. Please retry."
+)
+
+
+def _live_jobs_or_503() -> List[Dict[str, Any]]:
+    """Loads runtime live listings; a provider failure is an explicit 503."""
+    try:
+        return LiveJobProvider.get_jobs()
+    except LiveJobsUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=LIVE_JOBS_UNAVAILABLE_DETAIL
+        ) from exc
+
+
+def _select_live_job(jobs: List[Dict[str, Any]], job_id: Optional[str]) -> Dict[str, Any]:
+    """Selects a live listing by ID without ever substituting a seeded job."""
+    if not jobs:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=NO_LIVE_JOBS_DETAIL
+        )
+
+    if job_id:
+        target_job = next((job for job in jobs if job.get("id") == job_id), None)
+        if not target_job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Requested live job listing was not found. Refresh the opportunity feed."
+            )
+        return target_job
+
+    return jobs[0]
+
 class ResumeParseRequest(BaseModel):
     raw_text: str = Field(..., min_length=20, max_length=25000)
-    target_job_id: Optional[str] = "job-ai-sys"
+    target_job_id: Optional[str] = None
 
 class AnswerSubmitRequest(BaseModel):
     student_id: str = "stud-01"
     skill: str = "RAG Pipelines"
     question_text: Optional[str] = None
+    expected_keywords: List[str] = Field(default_factory=list)
     answer_text: str = Field(..., min_length=2, max_length=2000)
     current_difficulty: int = Field(6, ge=1, le=10)
 
@@ -61,7 +99,9 @@ class ApplicationSubmitRequest(BaseModel):
     job_id: str
     job_title: str
     company: str
-    tier: str
+    # Live listings carry no university tier, so an applicant may submit with
+    # no tier. The value is provenance only and never invents a CGPA rule.
+    tier: Optional[str] = None
 
 class PreferencesUpdateRequest(BaseModel):
     preferred_roles: List[str] = ["AI Systems & RAG Engineer", "Distributed Backend Developer"]
@@ -111,32 +151,28 @@ def reset_workspace_endpoint(authorized: bool = Depends(verify_tpo_token)):
 
 
 @router.get("/{student_id}/recommendations/next-action")
-def get_next_best_action(student_id: str, job_id: str = "job-ai-sys"):
+def get_next_best_action(student_id: str, job_id: Optional[str] = None):
     student = StudentRepository.get_by_id(student_id)
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found.")
 
-    all_jobs = LiveJobProvider.get_jobs()
-    target_job = next((j for j in all_jobs if j["id"] == job_id), None)
-    if not target_job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Requested job opportunity was not found."
-        )
+    target_job = _select_live_job(_live_jobs_or_503(), job_id)
 
     preferences = PreferenceRepository.get_preferences(student_id)
     match_res = SemanticMatchingEngine.evaluate(student, target_job, preferences)
-    missing = match_res.get("missing_skills", ["System Design"])
+    missing = match_res.get("missing_skills", [])
 
     action = ProgressTrackerService.get_next_best_action(
         student_id=student_id,
-        target_role_title=target_job.get("title", "Software Engineer"),
+        target_role_title=target_job["title"],
         missing_skills=missing,
         current_readiness=match_res.get("match_percentage", 75)
     )
     return {
         **action,
-        "data_mode": target_job.get("data_mode", "DEMO_DATA")
+        "data_mode": "LIVE_DATA",
+        "content_origin": "LIVE_DATA",
+        "source_name": target_job.get("source_name")
     }
 
 
@@ -181,7 +217,7 @@ def get_ranked_jobs_for_student(student_id: str):
 
     preferences = PreferenceRepository.get_preferences(student_id)
     feedback_list = PreferenceRepository.get_feedback(student_id)
-    all_jobs = LiveJobProvider.get_jobs()
+    all_jobs = _live_jobs_or_503()
 
     ranked_jobs = []
     for job in all_jobs:
@@ -208,27 +244,25 @@ def get_ranked_jobs_for_student(student_id: str):
 
     return {
         "ranked_jobs": ranked_jobs,
+        "data_mode": "LIVE_DATA",
+        "content_origin": "LIVE_DATA",
         "data_provenance": {
+            "status": "LIVE_DATA" if ranked_jobs else "EMPTY",
             "total_count": len(ranked_jobs),
-            "live_count": sum(1 for j in ranked_jobs if j.get("data_mode") == "LIVE_DATA"),
-            "demo_count": sum(1 for j in ranked_jobs if j.get("data_mode") == "DEMO_DATA")
+            "live_count": len(ranked_jobs),
+            "demo_count": 0,
+            "source": ranked_jobs[0].get("source_name") if ranked_jobs else None
         }
     }
 
 
 @router.get("/roadmap/{student_id}")
-def get_upskilling_roadmap(student_id: str, job_id: str = "job-ai-sys"):
+def get_upskilling_roadmap(student_id: str, job_id: Optional[str] = None):
     student = StudentRepository.get_by_id(student_id)
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student profile not found.")
 
-    all_jobs = LiveJobProvider.get_jobs()
-    target_job = next((j for j in all_jobs if j["id"] == job_id), None)
-    if not target_job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Requested job opportunity was not found for roadmap."
-        )
+    target_job = _select_live_job(_live_jobs_or_503(), job_id)
     preferences = PreferenceRepository.get_preferences(student_id)
     progress_data = ProgressTrackerService.get_progress(student_id)
     completed_milestones = progress_data.get("completed_milestones", [])
@@ -236,27 +270,35 @@ def get_upskilling_roadmap(student_id: str, job_id: str = "job-ai-sys"):
     match_res = SemanticMatchingEngine.evaluate(student, target_job, preferences)
     missing = match_res.get("missing_skills", [])
 
-    personalized_plan = UpskillingPlannerService.generate_roadmap(
-        target_job=target_job,
-        missing_skills=missing,
-        preferences=preferences,
-        completed_weeks=completed_milestones
-    )
-    return {
-        **personalized_plan,
-        "data_mode": "DEMO_DATA"  # Curated registry verified by college placement office
-    }
+    try:
+        personalized_plan = UpskillingPlannerService.generate_roadmap(
+            target_job=target_job,
+            missing_skills=missing,
+            preferences=preferences,
+            completed_weeks=completed_milestones
+        )
+    except RoadmapUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI learning roadmap generation is unavailable right now. Please retry."
+        )
+
+    return personalized_plan
 
 
 @router.get("/jobs/live")
 def get_live_job_catalogue():
-    jobs = LiveJobProvider.get_jobs()
+    jobs = _live_jobs_or_503()
     return {
         "jobs": jobs,
+        "data_mode": "LIVE_DATA",
+        "content_origin": "LIVE_DATA",
         "feed_metadata": {
+            "status": "LIVE_DATA" if jobs else "EMPTY",
             "total": len(jobs),
-            "live_count": sum(1 for j in jobs if j.get("data_mode") == "LIVE_DATA"),
-            "curated_count": sum(1 for j in jobs if j.get("data_mode") == "DEMO_DATA")
+            "live_count": len(jobs),
+            "demo_count": 0,
+            "source": "Arbeitnow"
         }
     }
 
@@ -294,7 +336,9 @@ def submit_campus_application(payload: ApplicationSubmitRequest):
             job_id=payload.job_id,
             job_title=payload.job_title,
             company=payload.company,
-            tier=payload.tier
+            # "UNSPECIFIED" records that the live listing carried no tier; it is
+            # not a fabricated eligibility tier or CGPA rule.
+            tier=payload.tier or "UNSPECIFIED"
         )
     except (ValueError, IntegrityError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
@@ -307,7 +351,7 @@ def submit_campus_application(payload: ApplicationSubmitRequest):
 
     return {
         "status": "success",
-        "message": f"Successfully enrolled in {payload.job_title} recruitment drive.",
+        "message": f"Application saved for {payload.job_title}.",
         "active_applications": student.get("active_apps_count", 0) + 1,
         "data_mode": "LIVE_DATA"
     }
@@ -316,7 +360,7 @@ def submit_campus_application(payload: ApplicationSubmitRequest):
 @router.post("/resume/upload-pdf")
 async def upload_pdf_resume(
     file: UploadFile = File(...),
-    target_job_id: str = Form("job-ai-sys")
+    target_job_id: Optional[str] = Form(None)
 ):
     start_total = time.time()
     execution_trace = []
@@ -367,8 +411,7 @@ async def upload_pdf_resume(
     })
 
     t0 = time.time()
-    all_jobs = LiveJobProvider.get_jobs()
-    target_job = next((j for j in all_jobs if j["id"] == target_job_id), all_jobs[0])
+    target_job = _select_live_job(_live_jobs_or_503(), target_job_id)
 
     vec_candidate = CareerSyncAIEngine.get_embedding(f"Skills: {', '.join(extracted_skills)}. {clean_text[:400]}")
     vec_job = CareerSyncAIEngine.get_embedding(f"Title: {target_job['title']}. Skills: {', '.join(target_job['required_skills'])}")
@@ -430,7 +473,7 @@ async def upload_pdf_resume(
         "active_apps_count": 0,
         "sla_hours_pending": 1,
         "admin_status": "Pending",
-        "target_role": target_job_id,
+        "target_role": target_job["id"],
         "skills": extracted_skills,
         "raw_resume": clean_text[:400],
         "quality_score": ai_audit.get("quality_score", 75),
@@ -467,8 +510,7 @@ def process_resume(payload: ResumeParseRequest):
     ai_audit = CareerSyncAIEngine.audit_resume_with_ai(clean_text)
     extracted_skills = ai_audit.get("extracted_skills", ["Python", "FastAPI"])
 
-    all_jobs = LiveJobProvider.get_jobs()
-    target_job = next((j for j in all_jobs if j["id"] == payload.target_job_id), all_jobs[0])
+    target_job = _select_live_job(_live_jobs_or_503(), payload.target_job_id)
 
     vec_candidate = CareerSyncAIEngine.get_embedding(f"Skills: {', '.join(extracted_skills)}. {clean_text[:400]}")
     vec_job = CareerSyncAIEngine.get_embedding(f"Title: {target_job['title']}. Skills: {', '.join(target_job['required_skills'])}")
@@ -526,20 +568,52 @@ def toggle_milestone_progress(student_id: str, payload: MilestoneToggleRequest):
 
 
 @router.get("/interview/question")
-def fetch_interview_question(skill: str = "RAG Pipelines", difficulty: int = 6):
+def fetch_interview_question(
+    skill: str = "RAG Pipelines",
+    difficulty: int = 6,
+    target_role: str = "",
+    previous_question: str = ""
+):
     clamped_diff = max(1, min(10, difficulty))
-    return InterviewAgentService.get_question(skill, clamped_diff)
+    try:
+        return InterviewAgentService.get_question(
+            skill=skill,
+            difficulty=clamped_diff,
+            target_role=target_role,
+            previous_question_text=previous_question
+        )
+    except InterviewQuestionUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI interview question generation is unavailable right now. Please retry."
+        )
 
 
 @router.post("/interview/evaluate")
 def evaluate_interview_answer(payload: AnswerSubmitRequest):
-    question_obj = InterviewAgentService.get_question(payload.skill, payload.current_difficulty)
-
-    evaluation = CareerSyncAIEngine.evaluate_interview_response_with_ai(
-        question_obj=question_obj,
-        candidate_answer=payload.answer_text,
-        current_difficulty=payload.current_difficulty
+    # Evaluate the question the candidate actually answered. When no rubric
+    # keywords are supplied (legacy clients), use the deterministic rubric so a
+    # question is never fabricated and provider variability cannot invent a
+    # coverage score.
+    question_obj = InterviewAgentService.build_evaluation_question(
+        question_text=payload.question_text or "",
+        expected_keywords=payload.expected_keywords,
+        skill=payload.skill,
+        difficulty=payload.current_difficulty
     )
+
+    if payload.expected_keywords:
+        evaluation = CareerSyncAIEngine.evaluate_interview_response_with_ai(
+            question_obj=question_obj,
+            candidate_answer=payload.answer_text,
+            current_difficulty=payload.current_difficulty
+        )
+    else:
+        evaluation = InterviewAgentService.evaluate_locally(
+            question_obj,
+            payload.answer_text,
+            payload.current_difficulty
+        )
 
     ProgressTrackerService.log_interview_attempt(
         student_id=payload.student_id,
