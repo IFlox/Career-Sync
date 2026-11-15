@@ -3,13 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from database import init_db
+from database import database_label, database_status, init_db
 from routes.student_routes import router as student_router
 from routes.admin_routes import router as admin_router
 
 load_dotenv()
 
-# Initialize SQLite Database and load initial seeds
+# Initialize the selected database (SQLite by default) and load initial seeds.
 init_db()
 
 app = FastAPI(
@@ -39,14 +39,24 @@ def root():
     return {
         "service": "CareerSync Hybrid Placement Agent",
         "status": "online",
-        "database": "SQLite (careersync.db)",
+        "database": database_label(),
         "policy": "JKLU Placement SOP 2026",
         "docs": "/docs"
     }
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "database": "connected", "policy_engine": "active"}
+    db_status = database_status()
+    return {
+        "status": "healthy",
+        "database": "connected",
+        "database_backend": db_status["database_backend"],
+        "postgres_configured": db_status["postgres_configured"],
+        "sqlite_fallback_active": db_status["sqlite_fallback_active"],
+        "sqlite_default_active": db_status["sqlite_default_active"],
+        "database_target": db_status["target"],
+        "policy_engine": "active"
+    }
 
 if __name__ == "__main__":
     import uvicorn

@@ -17,53 +17,15 @@ During campus placement seasons, students often apply for jobs without an eviden
 
 **CareerSync** is an autonomous agentic system built to solve this challenge through:
 1. **Resume PDF Ingestion & Privacy Guard:** Parses raw `.pdf` resumes with server-side text extraction and automatically scrubs PII (emails, phone numbers, addresses) before any external processing.
-2. **Semantic Job Alignment Engine:** Computes dense vector embeddings and cosine similarity against curated job descriptions (AI Systems Engineer, Cloud DevOps, Distributed Backend, Data Scientist).
+2. **Live Job Alignment Engine:** Fetches current technical listings, extracts validated skill signals from job tags, titles, and descriptions, and ranks opportunities against student profiles.
 3. **University Placement SOP Solver:** Enforces institutional rules automatically:
    - **CGPA Rule:** Restricts students with CGPA < 6.0 from Tier-1 drives.
    - **Application Cap:** Restricts students to a maximum of 3 concurrent active placement drives.
 4. **Adaptive Voice & Text Practice Interviewer:** Simulates live technical interviews with browser Speech-to-Text (`webkitSpeechRecognition`), dynamic 0–10 rubric evaluation, and adaptive difficulty scaling based on candidate answers.
 5. **Persistent Event-Sourced Progress:** Tracks milestone completions and historical readiness curves over time on the server—ensuring student progress is never lost on refresh.
-6. **Placement Cell (TPO) Command Center:** Equips placement officers with cohort-wide gap charts, review SLA escalation badges (> 48 hrs), a human-in-the-loop approval gate, and one-click verified CSV batch export.
+6. **Placement Cell (TPO) Command Center:** Equips placement officers with live cohort analytics, skill-data coverage reporting, review SLA escalation badges (> 48 hrs), a human-in-the-loop approval gate, refreshable data, and one-click verified CSV batch export.
+7. **AI Remediation Bootcamp:** Generates a three-day technical bootcamp through a configured AI provider and uses a deterministic curriculum when the provider is unavailable or returns invalid data.
 
----
-
-## 🏗️ Architecture & Directory Structure
-
-```text
-careersync/
-├── backend/                       # Python / FastAPI API (Port 8000)
-│   ├── .env
-│   ├── requirements.txt
-│   ├── main.py                    # Server entry, CORS, and route mounting
-│   ├── data_seeds.py              # Synthetic seed profiles & curated job catalogue
-│   ├── routes/
-│   │   ├── student_routes.py      # /api/v1/students/* (PDF upload, ATS, roadmap, interview)
-│   │   └── admin_routes.py        # /api/v1/admin/* (Matrix, approval status, CSV export)
-│   └── services/
-│       ├── ai_engine.py           # Multi-provider LLM cascade (Groq / Gemini / Fallback)
-│       ├── pdf_parser.py          # PDF binary stream extractor (pypdf)
-│       ├── pii_scrubber.py        # Regex PII token masking engine
-│       ├── matching_engine.py     # NumPy vector cosine similarity & SOP rule solver
-│       ├── progress_tracker.py    # Event-sourced persistence & time-series snapshots
-│       └── interview_agent.py     # Dynamic interview question bank & difficulty engine
-└── frontend/                      # React + Vite + Tailwind (Port 5173)
-    ├── package.json
-    ├── vite.config.js             # API proxy routing /api to http://127.0.0.1:8000
-    ├── tailwind.config.js          # Bento aesthetic (porcelain canvas, terracotta accents)
-    └── src/
-        ├── App.jsx                # Layout orchestrator & role-based view gate
-        ├── api/client.js          # Centralized fetch wrapper for FastAPI endpoints
-        └── components/
-            ├── Navbar.jsx                 # Top bar with privacy status & admin login
-            ├── StudentPortal.jsx          # Main candidate readiness & roadmap cockpit
-            ├── ConcentricReadinessDial.jsx# Layered multi-factor readiness score
-            ├── SkillRadarChart.jsx        # 6-Axis competency polygon vs. job target
-            ├── ProgressTimelineWidget.jsx # Growth sparkline & practice streak matrix
-            ├── MockInterview.jsx          # Adaptive voice interview studio with waveform
-            ├── ATSPreviewModal.jsx        # Single-column standardized ATS resume view
-            ├── AdminPortal.jsx            # Placement cell matrix, SLA flags & CSV export
-            └── ReasoningTrace.jsx         # Real-time agent execution telemetry HUD
-```
 
 ---
 
@@ -80,8 +42,8 @@ Make sure you have installed on your computer:
 
 ### 1. Clone the Project
 ```bash
-git clone https://github.com/your-username/careersync.git
-cd careersync
+git clone https://github.com/IFlox/Career-Sync.git
+cd Career-Sync
 ```
 
 ---
@@ -110,7 +72,19 @@ cd careersync
    pip install -r requirements.txt
    ```
 
-4. Create your `backend/.env` file:
+4. Make sure PostgreSQL is running and the `careersync` database exists:
+   * **Windows PowerShell:**
+     ```powershell
+     Get-Service -Name 'postgresql*'
+     Test-NetConnection -ComputerName localhost -Port 5432
+     pg_isready -h localhost -p 5432 -U postgres
+     ```
+   * **macOS / Linux:**
+     ```bash
+     pg_isready -h localhost -p 5432 -U postgres
+     ```
+
+5. Create your `backend/.env` file:
    ```bash
    # Windows (PowerShell):
    New-Item .env
@@ -118,21 +92,24 @@ cd careersync
    touch .env
    ```
 
-5. Paste the following configuration into `backend/.env`:
+6. Paste the following configuration into `backend/.env`:
    ```env
    PORT=8000
-   ADMIN_PIN=tpo_secure_2026
+   DATABASE_URL=postgresql://YOUR_USER:YOUR_PASSWORD@localhost:5432/careersync
+   SECRET_KEY=replace_with_a_local_secret
+   ADMIN_PIN=replace_with_a_local_admin_pin
    CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
-   # AI Provider: Get a free key in 30 seconds at https://console.groq.com/
+   # Optional AI providers:
    GROQ_API_KEY=your_groq_api_key_here
 
-   # (Optional) Secondary fallback key from https://aistudio.google.com/
    GEMINI_API_KEY=your_gemini_api_key_here
    ```
-   *(Note: If no API key is provided, the system automatically uses its internal deterministic offline engine with 100% uptime guarantee).*
+   `DATABASE_URL` is PostgreSQL by default. SQLite is supported only when an
+   explicit `sqlite://` URL is configured. Never commit `backend/.env` or real
+   credentials.
 
-6. Start the backend server:
+7. Start the backend server:
    ```bash
    python main.py
    ```
@@ -145,7 +122,7 @@ cd careersync
 
 1. Open a **new separate terminal tab** and navigate into `frontend/`:
    ```bash
-   cd careersync/frontend
+   cd Career-Sync/frontend
    ```
 
 2. Install Node dependencies:
@@ -161,6 +138,52 @@ cd careersync
 
 ---
 
+## 📚 Documentation & Verification
+
+When the backend is running, use:
+
+- **Swagger API docs:** `http://127.0.0.1:8000/docs`
+- **ReDoc API docs:** `http://127.0.0.1:8000/redoc`
+- **Health check:** `http://127.0.0.1:8000/health`
+
+The health response reports the selected database backend, PostgreSQL
+configuration, and connection target without exposing passwords.
+
+Run backend tests from `backend/`:
+
+```bash
+python -m pytest tests -q
+```
+
+Run frontend tests and the production build from `frontend/`:
+
+```bash
+npm test
+npm run build
+```
+
+On Windows PowerShell, use `npm.cmd` if `npm.ps1` is blocked by the execution
+policy:
+
+```powershell
+npm.cmd test
+npm.cmd run build
+```
+
+Useful project documentation:
+
+- [Python](https://docs.python.org/3/)
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [PostgreSQL](https://www.postgresql.org/docs/)
+- [SQLAlchemy](https://docs.sqlalchemy.org/)
+- [React](https://react.dev/)
+- [Vite](https://vite.dev/guide/)
+- [Tailwind CSS](https://tailwindcss.com/docs)
+- [Groq documentation](https://console.groq.com/docs)
+- [Google Gemini API documentation](https://ai.google.dev/gemini-api/docs)
+
+---
+
 ## 🔑 Pre-Seeded Profiles & Credentials
 
 The system includes pre-loaded synthetic student profiles to allow immediate evaluation without manual input:
@@ -171,7 +194,7 @@ The system includes pre-loaded synthetic student profiles to allow immediate eva
 | **Rahul Verma** | `6.8` | **58%** | Mid-tier backend developer with Node.js and PostgreSQL. | Demonstrates AI bullet rewrite recommendations and intermediate roadmaps. |
 | **Amit Patel** | `5.6` | **35%** | Underperforming candidate with legacy manual testing skills. | **Triggers SOP CGPA Guardrail (< 6.0)** and **SLA Overdue Review Alert (> 48 hrs)**. |
 
-* **Admin Portal Password:** `tpo_secure_2026`
+* **Admin Portal Password:** Use the `ADMIN_PIN` value configured in your local `backend/.env`. Never publish the real value.
 
 ---
 
@@ -205,8 +228,8 @@ Follow this 5-step flow to demonstrate each Buildathon rubric requirement:
 
 ### Step 5: Placement Cell (TPO) Command Center
 1. Click **[Admin Login]** in the top navigation bar.
-2. Enter password: `tpo_secure_2026`.
-3. Review the batch-wide missing skills chart (e.g., *67% missing Docker*).
+2. Enter your configured admin PIN.
+3. Review the live skill-signal chart and its skill-data coverage.
 4. Review the **Review Pending > 48 Hrs** SLA badge on overdue candidate profiles.
 5. Use the **Human-in-the-Loop gate**: change a candidate status to **[Approve]**.
 6. Click **[Export Verified Batch (CSV)]** to download the clean candidate roster for recruitment drives.
@@ -215,19 +238,25 @@ Follow this 5-step flow to demonstrate each Buildathon rubric requirement:
 
 ## ❓ Frequently Asked Questions (FAQ)
 
-#### 1. Why do I see `connect ECONNREFUSED 127.0.0.1:8000`?
+#### 1. Why do I see a PostgreSQL connection-refused error?
+* **Cause:** PostgreSQL is the default database and is not running or the `careersync` database does not exist.
+* **Fix:** Verify the service and port with `Get-Service -Name 'postgresql*'`,
+  `Test-NetConnection -ComputerName localhost -Port 5432`, and
+  `pg_isready -h localhost -p 5432 -U postgres`. Then check `DATABASE_URL`.
+
+#### 2. Why do I see `connect ECONNREFUSED 127.0.0.1:8000`?
 * **Cause:** The frontend cannot connect to the backend because FastAPI is not running.
 * **Fix:** Open a terminal in `backend/`, activate your virtual environment, and run `python main.py`. Make sure it displays `Application startup complete`.
 
-#### 2. Why does voice recognition not work when clicking "Speak Answer"?
+#### 3. Why does voice recognition not work when clicking "Speak Answer"?
 * **Cause:** The Web Speech API requires microphone permissions and works best on Chromium-based browsers (Google Chrome, Microsoft Edge, Brave).
 * **Fix:** Allow microphone permissions for `localhost`, or type your answer in the text area.
 
-#### 3. Can the application run completely offline without an API key?
-* **Yes.** If neither `GROQ_API_KEY` nor `GEMINI_API_KEY` is set in `backend/.env`, CareerSync automatically uses its internal deterministic rule engine. All vector matching, PDF extractions, interview evaluations, and roadmaps execute locally without throwing errors.
+#### 4. What happens when an AI provider is unavailable?
+* Deterministic local processing remains available for supported features. AI-first
+  features report an explicit unavailable state or use their documented
+  deterministic fallback, such as the remediation bootcamp curriculum.
 
----
-
-## 📄 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+#### 5. Where are the frontend tests?
+* Frontend tests are grouped under `frontend/tests/` by API, component, and
+  utility area. Run them from `frontend/` with `npm.cmd test` on Windows.

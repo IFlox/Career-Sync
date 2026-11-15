@@ -451,12 +451,20 @@ class LiveJobRouteTests(unittest.TestCase):
 
     def test_ranked_jobs_provider_failure_returns_503(self):
         from routes.student_routes import get_ranked_jobs_for_student
-        from database import StudentRepository
+        from database import PreferenceRepository, StudentRepository
 
         with patch.object(
             StudentRepository,
             "get_by_id",
             return_value={"id": "stud-01", "skills": [], "cgpa": 8.0},
+        ), patch.object(
+            PreferenceRepository,
+            "get_preferences",
+            return_value={},
+        ), patch.object(
+            PreferenceRepository,
+            "get_feedback",
+            return_value=[],
         ), patch.object(
             LiveJobProvider,
             "get_jobs",

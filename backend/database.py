@@ -2,44 +2,321 @@
 CareerSync PostgreSQL & SQLite Database Engine
 Full implementation supporting Students, Preferences, Applications, Feedback, and Role Readiness.
 Includes the reset_workspace() function to clear mutations and restore baseline demo states.
+
+Database selection rules
+-----------------------
+* ``DATABASE_URL`` unset/blank -> local PostgreSQL
+  (``postgresql+psycopg2://postgres:postgres@localhost:5432/careersync``).
+  PostgreSQL is required; startup fails clearly if it is unreachable.
+* ``DATABASE_URL`` set to a PostgreSQL URL -> that PostgreSQL server is required.
+  Unreachable PostgreSQL is never converted into a SQLite fallback.
+* ``DATABASE_URL`` set to a URL beginning with ``sqlite://`` -> that SQLite file
+  is used explicitly. SQLite is never selected automatically.
+
+SQLite fallback is not enabled anywhere in this module.
 """
 
 import os
 import json
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text, MetaData
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import sessionmaker
 from data_seeds import STUDENT_DATABASE as SEED_STUDENTS
 
 load_dotenv()
 
-RAW_DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/careersync")
-SQLITE_FALLBACK_URL = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'careersync.db')}"
+SQLITE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "careersync.db")
+DEFAULT_SQLITE_URL = f"sqlite:///{SQLITE_PATH}"
+DEFAULT_POSTGRES_URL = (
+    "postgresql+psycopg2://postgres:postgres@localhost:5432/careersync"
+)
+# Kept as an alias for backwards compatibility with older imports.
+SQLITE_FALLBACK_URL = DEFAULT_SQLITE_URL
 
-# Normalize URL driver prefix
-if RAW_DB_URL.startswith("postgresql://"):
-    RAW_DB_URL = RAW_DB_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-try:
-    engine = create_engine(RAW_DB_URL, pool_pre_ping=True)
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    IS_POSTGRES = True
-    print(f"[DATABASE] Connected to PostgreSQL: {RAW_DB_URL.split('@')[-1]}")
-except Exception as e:
-    print(f"[DATABASE] PostgreSQL offline ({e}). Using local SQLite engine.")
-    engine = create_engine(SQLITE_FALLBACK_URL, connect_args={"check_same_thread": False})
-    IS_POSTGRES = False
+class DatabaseConfigurationError(RuntimeError):
+    """Raised when DATABASE_URL cannot be interpreted safely."""
+
+
+class DatabaseConnectionError(RuntimeError):
+    """Raised when the selected database cannot be reached."""
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    """Resolved database selection. ``url`` may contain credentials; never log it."""
+
+    url: str
+    backend: str
+    postgres_configured: bool
+    sqlite_fallback_active: bool
+    source: str
+    sqlite_default_active: bool = False
+    sqlite_path: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    database: Optional[str] = None
+
+
+def normalize_database_url(raw_url: str) -> str:
+    """Normalize PostgreSQL aliases to the synchronous psycopg2 SQLAlchemy driver."""
+    url = raw_url.strip()
+    lower = url.lower()
+    if lower.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
+    if lower.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
+
+def mask_database_url(url: str) -> str:
+    """Render a URL without password, query string, or other secret material."""
+    try:
+        parsed = make_url(url)
+    except Exception:
+        return "<unparseable database URL>"
+
+    if parsed.get_backend_name() == "sqlite":
+        return f"sqlite:///{parsed.database}"
+
+    auth = f"{parsed.username}@" if parsed.username else ""
+    host = parsed.host or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    database = f"/{parsed.database}" if parsed.database else ""
+    return f"{parsed.drivername}://{auth}{host}{port}{database}"
+
+
+def _safe_error_detail(exc: Exception, config: DatabaseConfig) -> str:
+    """Remove credentials before surfacing a driver error."""
+    detail = str(exc)
+    try:
+        password = make_url(config.url).password
+    except Exception:
+        password = None
+    if password:
+        detail = detail.replace(password, "***")
+        detail = detail.replace(quote(password, safe=""), "***")
+    detail = detail.replace(config.url, mask_database_url(config.url))
+    detail = " ".join(detail.split())
+    return detail[:500]
+
+
+def resolve_database_config(database_url: Optional[str] = None) -> DatabaseConfig:
+    """
+    Resolve the database selection without opening a connection.
+
+    When ``database_url`` is omitted, ``DATABASE_URL`` is read from the
+    environment (loaded from ``backend/.env`` above). An empty or missing
+    value selects local PostgreSQL; SQLite is only used when the configured
+    URL explicitly begins with ``sqlite://``.
+    """
+    raw_url = os.getenv("DATABASE_URL") if database_url is None else database_url
+
+    if raw_url is None or not raw_url.strip():
+        parsed = make_url(DEFAULT_POSTGRES_URL)
+        return DatabaseConfig(
+            url=DEFAULT_POSTGRES_URL,
+            backend="postgresql",
+            postgres_configured=True,
+            sqlite_fallback_active=False,
+            source="default-postgresql",
+            sqlite_default_active=False,
+            host=parsed.host or "localhost",
+            port=parsed.port or 5432,
+            database=parsed.database,
+        )
+
+    normalized = normalize_database_url(raw_url)
+    try:
+        parsed = make_url(normalized)
+        backend = parsed.get_backend_name()
+    except Exception as exc:
+        raise DatabaseConfigurationError(
+            "DATABASE_URL is not a valid SQLAlchemy database URL. "
+            "Use postgresql://user:password@host:5432/database or sqlite:///path/to/file.db."
+        ) from exc
+
+    if backend == "postgresql":
+        return DatabaseConfig(
+            url=normalized,
+            backend="postgresql",
+            postgres_configured=True,
+            sqlite_fallback_active=False,
+            source="DATABASE_URL",
+            sqlite_default_active=False,
+            host=parsed.host or "localhost",
+            port=parsed.port or 5432,
+            database=parsed.database,
+        )
+
+    # SQLite is opt-in only: it must be an explicit sqlite:// URL.
+    if normalized.lower().startswith("sqlite://"):
+        if not parsed.database:
+            raise DatabaseConfigurationError(
+                "DATABASE_URL selects SQLite but does not include a database file path."
+            )
+        return DatabaseConfig(
+            url=normalized,
+            backend="sqlite",
+            postgres_configured=False,
+            sqlite_fallback_active=False,
+            source="DATABASE_URL",
+            sqlite_default_active=False,
+            sqlite_path=parsed.database,
+        )
+
+    raise DatabaseConfigurationError(
+        f"Unsupported DATABASE_URL scheme '{backend}'. Supported values are "
+        "postgresql:// URLs and explicit sqlite:// URLs."
+    )
+
+
+def _ensure_sqlite_directory(config: DatabaseConfig) -> None:
+    path = config.sqlite_path
+    if not path or path == ":memory:" or path.startswith("file:"):
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+
+def create_database_engine(config: DatabaseConfig) -> Engine:
+    """Create a SQLAlchemy engine for the resolved configuration."""
+    if config.backend == "sqlite":
+        _ensure_sqlite_directory(config)
+        return create_engine(config.url, connect_args={"check_same_thread": False})
+
+    try:
+        return create_engine(config.url, pool_pre_ping=True)
+    except ModuleNotFoundError as exc:
+        raise DatabaseConfigurationError(
+            "DATABASE_URL selects PostgreSQL, but the psycopg2 driver is not installed. "
+            "Run 'pip install -r requirements.txt' (psycopg2-binary) and restart the backend."
+        ) from exc
+
+
+def verify_database_connection(db_engine: Engine, config: DatabaseConfig) -> None:
+    """
+    Fail loudly if the selected database is unreachable.
+
+    PostgreSQL failures are never converted into a SQLite fallback.
+    """
+    try:
+        with db_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        detail = _safe_error_detail(exc, config)
+        if config.backend == "postgresql":
+            host = config.host or "localhost"
+            port = config.port or 5432
+            database = config.database or "careersync"
+            raise DatabaseConnectionError(
+                "PostgreSQL is configured as the database backend but the server is unreachable. "
+                f"PostgreSQL must be running and accepting TCP connections on {host}:{port} "
+                f"(database '{database}'). Start the PostgreSQL service, verify the host, port, "
+                "username, password, and database name, then restart the backend. "
+                "Verify PostgreSQL on Windows with:\n"
+                "  Get-Service -Name 'postgresql*'\n"
+                f"  Test-NetConnection -ComputerName {host} -Port {port}\n"
+                f"  pg_isready -h {host} -p {port} -U postgres\n"
+                "The backend will not silently fall back to SQLite while PostgreSQL is the "
+                f"selected backend. Driver detail: {detail}"
+            ) from exc
+        raise DatabaseConnectionError(
+            f"Could not open the SQLite database at {config.sqlite_path}. "
+            "Check that the parent directory exists and is writable. "
+            f"Driver detail: {detail}"
+        ) from exc
+
+
+def connect_database(config: Optional[DatabaseConfig] = None) -> Engine:
+    """Create and verify an engine for ``config`` (or the active configuration)."""
+    resolved = config or DATABASE_CONFIG
+    db_engine = create_database_engine(resolved)
+    verify_database_connection(db_engine, resolved)
+    return db_engine
+
+
+def database_status(config: Optional[DatabaseConfig] = None, connection_verified: Optional[bool] = None) -> Dict[str, Any]:
+    """Safe diagnostic payload. Never contains passwords or full credential URLs."""
+    resolved = config or DATABASE_CONFIG
+    verified = _connection_verified if connection_verified is None else connection_verified
+
+    status: Dict[str, Any] = {
+        # "database_backend" is the canonical name; "backend" is retained for
+        # backward compatibility with earlier diagnostics and health clients.
+        "database_backend": resolved.backend,
+        "backend": resolved.backend,
+        "postgres_configured": resolved.postgres_configured,
+        "sqlite_fallback_active": resolved.sqlite_fallback_active,
+        "sqlite_default_active": resolved.sqlite_default_active,
+        "source": resolved.source,
+        "connection_verified": bool(verified),
+    }
+    if resolved.backend == "sqlite":
+        status["sqlite_path"] = resolved.sqlite_path
+        status["target"] = resolved.sqlite_path
+    else:
+        status["host"] = resolved.host
+        status["port"] = resolved.port
+        status["database"] = resolved.database
+        status["target"] = mask_database_url(resolved.url)
+    return status
+
+
+def format_database_status(config: Optional[DatabaseConfig] = None, connection_verified: Optional[bool] = None) -> str:
+    """One-line, credential-free diagnostic suitable for logs or health output."""
+    status = database_status(config, connection_verified)
+    return (
+        "[DATABASE] "
+        f"backend={status['backend']} "
+        f"postgres_configured={str(status['postgres_configured']).lower()} "
+        f"sqlite_fallback_active={str(status['sqlite_fallback_active']).lower()} "
+        f"sqlite_default_active={str(status['sqlite_default_active']).lower()} "
+        f"connection_verified={str(status['connection_verified']).lower()} "
+        f"target={status['target']}"
+    )
+
+
+def database_label(config: Optional[DatabaseConfig] = None) -> str:
+    """Human-readable backend label without credentials."""
+    resolved = config or DATABASE_CONFIG
+    if resolved.backend == "sqlite":
+        name = os.path.basename(resolved.sqlite_path or "sqlite")
+        return f"SQLite ({name})"
+    return f"PostgreSQL ({resolved.host}:{resolved.port}/{resolved.database})"
+
+
+DATABASE_CONFIG = resolve_database_config()
+engine = create_database_engine(DATABASE_CONFIG)
+IS_POSTGRES = DATABASE_CONFIG.backend == "postgresql"
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 metadata = MetaData()
+_connection_verified = False
 
 
-def init_db():
-    with engine.begin() as conn:
+def init_db(target_engine: Optional[Engine] = None, target_config: Optional[DatabaseConfig] = None):
+    """Verify the selected database, create missing tables, and seed demo data."""
+    global _connection_verified
+
+    db_engine = target_engine if target_engine is not None else engine
+    config = target_config if target_config is not None else DATABASE_CONFIG
+
+    verify_database_connection(db_engine, config)
+    if db_engine is engine:
+        _connection_verified = True
+
+    print(format_database_status(config, connection_verified=True))
+    is_postgres = db_engine.dialect.name == "postgresql"
+
+    with db_engine.begin() as conn:
         # 1. Students Table
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS students (
@@ -76,7 +353,7 @@ def init_db():
         """))
 
         # 3. Recommendation Feedback Table
-        if IS_POSTGRES:
+        if is_postgres:
             conn.execute(text("""
             CREATE TABLE IF NOT EXISTS recommendation_feedback (
                 id SERIAL PRIMARY KEY,
@@ -104,7 +381,7 @@ def init_db():
             """))
 
         # 4. Role-Specific Readiness Snapshots Table
-        if IS_POSTGRES:
+        if is_postgres:
             conn.execute(text("""
             CREATE TABLE IF NOT EXISTS role_readiness_snapshots (
                 id SERIAL PRIMARY KEY,
@@ -147,7 +424,7 @@ def init_db():
         """))
 
         # 6. Progress Events Table
-        if IS_POSTGRES:
+        if is_postgres:
             conn.execute(text("""
             CREATE TABLE IF NOT EXISTS progress_events (
                 id SERIAL PRIMARY KEY,
@@ -460,7 +737,7 @@ class PreferenceRepository:
     @staticmethod
     def save_feedback(student_id: str, entity_type: str, entity_id: str, action: str, reason: Optional[str] = None):
         with engine.begin() as conn:
-            if IS_POSTGRES:
+            if conn.dialect.name == "postgresql":
                 conn.execute(text("""
                 INSERT INTO recommendation_feedback (student_id, entity_type, entity_id, action, reason)
                 VALUES (:student_id, :entity_type, :entity_id, :action, :reason)
